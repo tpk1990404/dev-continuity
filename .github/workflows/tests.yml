@@ -1,0 +1,30 @@
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Continuity regression tests
+        run: python -X utf8 -B -m unittest discover -s dev-continuity/scripts -p test_continuity.py
+      - name: Installer isolation and rollback
+        run: python -X utf8 -B -m unittest discover -s . -p test_install.py
+      - name: Offline example
+        run: python -X utf8 -B examples/demo.py

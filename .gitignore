@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+.dev-continuity/
+install-plan.json
+integration-plan.json
+*.local.json
+dist/
+.DS_Store
+Thumbs.db

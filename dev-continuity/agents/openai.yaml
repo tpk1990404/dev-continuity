@@ -1,0 +1,6 @@
+interface:
+  display_name: "开发连续性"
+  short_description: "以简短检查点、原文索引和核验接棒保持跨对话开发连续性，控制上下文消耗"
+  default_prompt: "使用 $dev-continuity 核对当前开发目标与证据，保存检查点并继续未完成工作。"
+policy:
+  allow_implicit_invocation: true
