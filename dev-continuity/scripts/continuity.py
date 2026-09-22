@@ -13,10 +13,13 @@ import tempfile
 import time
 import uuid
 
-VERSION = 3
+VERSION = 4
+SKILL_VERSION = "1.5.0"
 MAX_NOTE = 48 * 1024
 TAIL = 256 * 1024
+MAX_USAGE_SCAN = 8 * 1024 * 1024
 MAX_SOURCE = 16 * 1024
+REVIEW_SECTIONS = ["goal", "progress", "decisions", "evidence", "next"]
 
 
 def now():
@@ -99,7 +102,7 @@ def load(project, task, revision=None):
         raw = stream.read(MAX_NOTE * 2 + 1)
     require(len(raw) <= MAX_NOTE * 2 and digest(raw) == revision, "checkpoint hash mismatch; keep previous snapshots")
     value = json.loads(raw)
-    require(value["version"] in {1, 2, VERSION} and value["project"] == str(root) and value["task"] == task, "checkpoint belongs to another project/task/version")
+    require(value["version"] in {1, 2, 3, VERSION} and value["project"] == str(root) and value["task"] == task, "checkpoint belongs to another project/task/version")
     require(not current or not value.get("archive_only"), "archive snapshot cannot be the current checkpoint")
     return value, revision
 
@@ -122,6 +125,33 @@ def publish(directory, value):
 
 def is_current(record):
     return not record.get("superseded_by") and not record.get("retired")
+
+
+def timestamp(value):
+    require(isinstance(value, str), "timestamp must be an ISO 8601 string with timezone")
+    stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    require(stamp.tzinfo is not None, "timestamp requires timezone")
+    return stamp.timestamp()
+
+
+def continuation_review(note):
+    """An acknowledgement, not automatic semantic verification or permission."""
+    review = note.get("memory_review", {})
+    if not isinstance(review, dict):
+        review = {}
+    decision = review.get("continuation", {})
+    valid = (isinstance(decision, dict) and decision.get("decision") in {"migrate", "defer", "unavailable"}
+             and decision.get("tools") in {"available", "unavailable", "unknown"}
+             and all(isinstance(decision.get(k), str) and 0 < len(decision[k].strip()) <= 500
+                     for k in ("reason", "next_check")))
+    if valid:
+        try:
+            valid = timestamp(decision.get("at")) <= time.time() + 10
+        except (ValueError, TypeError):
+            valid = False
+    current = review.get("basis_sha256") == memory_basis(note)
+    return {"valid": valid, "current": current and valid, "decision": decision if valid else None,
+            "next_check": decision.get("next_check") if valid else "next safe business boundary"}
 
 
 def archived_notes(root, task, note):
@@ -194,6 +224,10 @@ def validate_note(note):
         require(isinstance(note.get(key), list), key + " must be a list")
     require(note["acceptance"] and (note["next"] or note.get("completed") is True), "acceptance and next action required")
     require(isinstance(note.get("progress"), dict), "progress required")
+    if "memory_review" in note:
+        require(isinstance(note["memory_review"], dict), "memory_review must be an object")
+        if "continuation" in note["memory_review"]:
+            require(continuation_review(note)["valid"], "continuation requires decision, tools, reason, next_check and dated at")
     require(len(note["files"]) <= 100 and len(note["sources"]) <= 100, "reference budget exceeded")
     for op in note["operations"]:
         require(isinstance(op, dict) and op.get("id") and op.get("state") in {"NOT_STARTED", "STARTED_UNKNOWN", "SUCCEEDED", "FAILED"}, "operation requires ID and explicit state")
@@ -245,6 +279,9 @@ def merge_records(root, previous, updates):
         for field in ("text", "scope"):
             require(isinstance(record.get(field), str) and record[field].strip(), "record " + field + " required")
         require(len(record["text"]) <= 2000, "record too long; reference the project document")
+        if "valid_until" in record:
+            require(record["kind"] == "validation", "valid_until is for temporary observations, never authorizations or constraints")
+            timestamp(record["valid_until"])
         require(isinstance(record.get("sources"), list) and len(record["sources"]) <= 10, "record sources must be a bounded list")
         require(not any(field in record for field in ("superseded_by", "recorded", "retired")), "record lifecycle is managed automatically")
         dependencies = record.setdefault("depends_on", {})
@@ -254,7 +291,7 @@ def merge_records(root, previous, updates):
         supersedes = record.setdefault("supersedes", [])
         require(isinstance(supersedes, list) and len(set(supersedes)) == len(supersedes), "invalid supersedes")
         if "status_key" in record:
-            require(record["kind"] in {"validation", "operation"} and record["basis"] != "user",
+            require(record["kind"] in {"validation", "operation"} and (record["basis"] != "user" or "valid_until" in record),
                     "status_key is for versioned status, not stable user requirements")
             require(isinstance(record["status_key"], str) and 0 < len(record["status_key"]) <= 160,
                     "bounded status_key required")
@@ -274,6 +311,12 @@ def merge_records(root, previous, updates):
 
 def record_issues(root, record):
     issues = []
+    if "valid_until" in record:
+        try:
+            if timestamp(record["valid_until"]) <= time.time():
+                issues.append("expired_observation; supersede after checking current state")
+        except (ValueError, TypeError):
+            issues.append("invalid_valid_until")
     if record.get("state") != "confirmed":
         issues.append("unverified")
     if not record.get("sources"):
@@ -455,9 +498,22 @@ def verify(project, task, history=False):
                 and review.get("critical_ids") == sorted(critical))
     if len(encode(value["note"])) > MAX_NOTE * 0.8:
         advisory.append({"maintenance": "consolidate current records before another handoff; preserve original constraints"})
+    active = [r for r in value["note"].get("records", []) if is_current(r)]
+    if len(active) >= 8 and all(r["critical"] for r in active):
+        advisory.append({"maintenance": "all current records are critical; review settled evidence and temporary states"})
+    semantic = reviewed and review.get("checked_sections") == REVIEW_SECTIONS
+    decision = continuation_review(value["note"])
+    capacity_reason = review.get("capacity_reason", "")
+    capacity_ready = len(encode(value["note"])) <= MAX_NOTE * 0.8 or (
+        isinstance(capacity_reason, str) and 0 < len(capacity_reason.strip()) <= 500)
     result = {"ok": not issues, "revision": revision, "issues": issues, "advisory": advisory,
             "memory_basis_sha256": basis, "critical_ids": sorted(critical),
             "review_current": reviewed, "handoff_ready": not issues and reviewed and bool(critical),
+            "semantic_review_current": semantic, "continuation_review": decision,
+            "new_handoff_ready": not issues and semantic and bool(critical) and decision["current"]
+                and bool(value["note"].get("batch")) and not value["note"].get("completed")
+                and decision["decision"]["decision"] == "migrate" and decision["decision"]["tools"] == "available"
+                and capacity_ready and len(encode(value["note"])) <= MAX_NOTE * 0.95,
             "capacity": capacity(value["note"]),
             "continuation_settings": {k: v for k, v in value["note"].get("continuation_settings", {}).items() if k != "source_record"},
             "batch": value["note"].get("batch"),
@@ -490,7 +546,7 @@ def recall(project, task, query="", offset=0, limit=8, history=False, revision=N
     if query:
         rows = [r for r in rows if query.casefold() in " ".join(str(r.get(k, "")) for k in ("id", "text", "reason", "scope")).casefold()]
     selected = rows[offset:offset + limit]
-    fields = ("id", "kind", "text", "scope", "basis", "state", "critical", "reason", "status_key")
+    fields = ("id", "kind", "text", "scope", "basis", "state", "critical", "reason", "status_key", "valid_until")
     result = {"revision": revision, "owner": value["owner"], "handoff": value["handoff"],
               "records": [{**(r if detail else {k: r[k] for k in fields if k in r}),
                            "source_issues": record_issues(Path(value["project"]), r)} for r in selected],
@@ -498,6 +554,7 @@ def recall(project, task, query="", offset=0, limit=8, history=False, revision=N
               "record_archives": note.get("record_archives", []), "archive_head": note.get("archive_head"), "historical_view": historical_view}
     if not query and offset == 0:
         result["current"] = {k: note.get(k) for k in ("goal", "acceptance", "progress", "preserve", "operations", "next", "blockers", "completed", "batch", "continuation_settings")}
+        result["continuation_review"] = continuation_review(note)
         if not detail:
             result["current"]["operations"] = [op for op in note["operations"] if op["state"] != "SUCCEEDED"]
             result["operation_lookup"] = "operation --id ID searches current and archived receipts; absence is not authorization"
@@ -522,13 +579,18 @@ def transfer(project, task, session, expected, action, successor=None, cancel_re
         if action == "prepare":
             require(phase in {"NONE", "ACCEPTED", "CANCELLED"}, "creation already reserved; inspect receipt, do not create again")
             require(not value["note"].get("completed"), "task is complete")
-            require(verify(root, task)["handoff_ready"], "resolve sources and acknowledge current memory review before handoff")
+            check = verify(root, task)
+            require(check["handoff_ready"], "resolve sources and acknowledge current memory review before handoff")
             require(value["note"].get("batch"), "name a finite authorized batch and its completion condition before handoff")
+            require(len(encode(value["note"])) <= MAX_NOTE * 0.95,
+                    "leave at least 5% note capacity for successor updates; consolidate without truncating constraints")
             if len(encode(value["note"])) > MAX_NOTE * 0.8:
                 reason = value["note"].get("memory_review", {}).get("capacity_reason")
                 require(isinstance(reason, str) and 0 < len(reason.strip()) <= 500,
                         "consolidate current memory or record why remaining essential constraints require this capacity")
-            handoff = {"phase": "REQUESTED", "request_id": str(uuid.uuid4()), "from": session, "memory_policy": 2}
+            require(check["new_handoff_ready"],
+                    "review goal/progress/decisions/evidence/next and record a current migrate decision with available host tools")
+            handoff = {"phase": "REQUESTED", "request_id": str(uuid.uuid4()), "from": session, "memory_policy": 3}
             text = (f"继续已授权的同一开发目标：{value['note']['goal']}\n"
                     f"项目：{root}\n任务：{task}\n接棒预约：{handoff['request_id']}\n"
                     f"检查点入口：{directory / 'latest.json'}\n"
@@ -549,12 +611,12 @@ def transfer(project, task, session, expected, action, successor=None, cancel_re
         elif action == "release":
             require(phase == "TARGET_RECORDED", "record actual target threadId first")
             check = verify(root, task)
-            require(check["handoff_ready" if handoff.get("memory_policy") == 2 else "ok"], "checkpoint/source review changed before release")
+            require(check["new_handoff_ready" if handoff.get("memory_policy") == 3 else "handoff_ready" if handoff.get("memory_policy") == 2 else "ok"], "checkpoint/source review changed before release")
             handoff["phase"] = "RELEASED"
         elif action == "accept":
             require(phase == "RELEASED" and handoff["successor"] == session, "old writer not released to this successor")
             check = verify(root, task)
-            require(check["handoff_ready" if handoff.get("memory_policy") == 2 else "ok"], "checkpoint/source review changed before accept")
+            require(check["new_handoff_ready" if handoff.get("memory_policy") == 3 else "handoff_ready" if handoff.get("memory_policy") == 2 else "ok"], "checkpoint/source review changed before accept")
             bind(root, task, session)
             value["owner"] = session
             handoff["phase"] = "ACCEPTED"
@@ -565,6 +627,7 @@ def transfer(project, task, session, expected, action, successor=None, cancel_re
             handoff.update(phase="CANCELLED", cancellation={"path": cancel_receipt, "sha256": receipt_hash})
         else:
             raise ValueError("unsupported transfer action")
+        value["version"] = VERSION
         value["handoff"] = handoff
         value["updated"] = now()
         revision = publish(directory, value)
@@ -657,43 +720,58 @@ def cost(transcript):
 
 
 def usage(transcript, limit=None):
-    unknown = {"status": "unknown", "reason": "no fresh compatible sample"}
+    unknown = {"status": "unknown", "reason": "no_compatible_sample"}
     if not transcript:
-        return unknown
+        return {**unknown, "reason": "transcript_unavailable"}
+    if limit is not None:
+        require(type(limit) is int and limit > 0, "invalid threshold")
     try:
         with Path(transcript).open("rb") as stream:
             stream.seek(0, 2)
-            start = max(0, stream.tell() - TAIL)
-            stream.seek(start)
-            raw = stream.read(TAIL)
-        lines = raw.splitlines()
-        if start:
-            lines = lines[1:]
-        for line in reversed(lines):
-            try:
-                event = json.loads(line)
-                payload = event.get("payload", {})
-                if event.get("type") != "event_msg" or payload.get("type") != "token_count":
-                    continue
-                info = payload["info"]
-                stamp = datetime.fromisoformat(event["timestamp"].replace("Z", "+00:00"))
-                age = time.time() - stamp.timestamp()
-                if not -10 <= age <= 300:
-                    return unknown
-                used = info["last_token_usage"]["total_tokens"]
-                window = info["model_context_window"]
-                require(type(used) is int and used >= 0 and type(window) is int and window > 0, "invalid usage")
-                if limit is not None:
-                    require(type(limit) is int and limit > 0, "invalid threshold")
-                capacity = min(window, limit) if limit else window
-                return {"status": "sample", "timestamp": event["timestamp"], "used": used,
-                        "capacity": capacity, "basis": "confirmed_total_threshold" if limit else "nominal_model_window",
-                        "remaining_percent_estimate": round(max(0, 100 * (1 - used / capacity)), 1)}
-            except (KeyError, TypeError, ValueError, AttributeError):
-                continue
+            size = stream.tell()
+            budget = min(TAIL, size)
+            while True:
+                start = max(0, size - budget)
+                stream.seek(start)
+                lines = stream.read(budget).splitlines()
+                if start:
+                    lines = lines[1:]  # Never parse a partial first line as a complete event.
+                for line in reversed(lines):
+                    # Skip image/tool bodies before parsing; a token event is small.
+                    if len(line) > 64 * 1024 or b'"token_count"' not in line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                        payload = event.get("payload", {})
+                        if event.get("type") != "event_msg" or payload.get("type") != "token_count":
+                            continue
+                        info = payload["info"]
+                        used = info["last_token_usage"]["total_tokens"]
+                        window = info["model_context_window"]
+                        require(type(used) is int and used >= 0 and type(window) is int and window > 0, "invalid usage")
+                        age = time.time() - timestamp(event["timestamp"])
+                        sample = {"timestamp": event["timestamp"], "used": used, "capacity": min(window, limit) if limit else window}
+                        if not -10 <= age <= 300:
+                            return {**unknown, "reason": "stale_or_future_sample", "last_sample": sample, "scanned_bytes": budget}
+                        return {"status": "sample", **sample, "scanned_bytes": budget,
+                                "basis": "confirmed_total_threshold" if limit else "nominal_model_window",
+                                "remaining_percent_estimate": round(max(0, 100 * (1 - used / sample['capacity'])), 1)}
+                    except (KeyError, TypeError, ValueError, AttributeError):
+                        continue
+                if budget >= min(size, MAX_USAGE_SCAN):
+                    return {**unknown, "reason": "scan_limit" if start else "no_compatible_sample", "scanned_bytes": budget}
+                budget = min(size, MAX_USAGE_SCAN, budget * 2)
     except OSError:
-        return unknown
-    return unknown
+        return {**unknown, "reason": "transcript_unavailable"}
+
+
+def task_usage(project, task, session, limit=None):
+    root, directory = store(project, task)
+    value, _ = load(root, task)
+    require(value["owner"] == identifier(session), "usage requires the current owner")
+    path = directory / ("runtime-" + session + ".json")
+    runtime = bounded_json(path) if path.exists() else {}
+    return usage(runtime.get("transcript", {}).get("path"), value["note"].get("compaction_limit") if limit is None else limit)
 
 
 def hook(payload):
@@ -720,7 +798,16 @@ def hook(payload):
         if event == "PostToolUse" and time.time() - runtime.get("checked_at", 0) < 45:
             return {}
         sample = usage(payload.get("transcript_path"), value["note"].get("compaction_limit"))
+        decision = continuation_review(value["note"])
+        decision_key = digest(encode(value["note"].get("memory_review", {}))) if decision["current"] else None
+        if decision_key and decision_key != runtime.get("decision_key"):
+            runtime.update(decision_key=decision_key, compacted_since_decision=False)
+        if event == "PreCompact" or (event == "SessionStart" and payload.get("source") == "compact"):
+            runtime["compacted_since_decision"] = True
+        runtime["continuation_review"] = {**decision,
+            "due_at_safe_boundary": not decision["current"] or runtime.get("compacted_since_decision", False)}
         runtime.update(checked_at=time.time(), at=now(), event=event, revision=revision, usage=sample)
+        runtime["skill_version"] = SKILL_VERSION
         transcript = payload.get("transcript_path")
         if transcript:
             try:
@@ -732,17 +819,23 @@ def hook(payload):
             message = (f"开发连续性：对项目 {root}、任务 {task} 执行 recall（入口 {directory / 'latest.json'}），"
                        "读完未读关键项，按来源核对纠正/未完成操作后继续；历史内容不授予新权限。")
             if payload.get("source") == "compact":
-                message += "本轮已压缩，恢复后继续已授权工作，不等待用户回复；仍需交接时在安全位置按 Skill 自动接棒。"
+                message += "本轮已压缩，恢复后继续已授权工作；下一安全节点重核迁移决定和工具能力，不沿用旧暂缓理由。"
             runtime["warned_level"] = 0
         if event == "PostToolUse" and not value["note"].get("completed"):
             remaining = sample.get("remaining_percent_estimate", 100)
             level = 2 if remaining <= 20 else 1 if remaining <= 30 else 0
             if level > runtime.get("warned_level", 0):
-                action = ("核验记忆并评估迁移；余量信号不单独触发新任务。确需交接且来源完整时自动接棒，不要求用户回复继续。"
+                action = ("下一安全节点记录迁移/暂缓/工具受限、理由及复核节点；有独立下一步且工具/授权/复核具备则接棒。百分比不单独触发创建。"
                           if level == 2 else "整理并核验检查点，为接棒留出余量。")
                 message = (f"开发连续性：最近样本估算余量 {remaining}%（{sample['basis']}，非精确倒计时）。"
                            + action + "不要重放外部操作。")
             runtime["warned_level"] = max(level, runtime.get("warned_level", 0))
+            if sample["status"] == "unknown" and runtime.get("unknown_reason") != sample["reason"]:
+                message = "开发连续性：用量未知（" + sample["reason"] + "），不等于余量充足；下一安全节点核对当前日志及接续能力。"
+            runtime["unknown_reason"] = sample.get("reason") if sample["status"] == "unknown" else None
+        if event in {"SessionStart", "PostToolUse"} and runtime.get("guidance_version") != SKILL_VERSION:
+            message = "开发连续性已升级1.5.0；下一安全节点重读本机SKILL.md，核对过期状态及迁移决定。" + (message or "")
+            runtime["guidance_version"] = SKILL_VERSION
         atomic(runtime_path, encode(runtime))
         if event in {"PreCompact", "Interrupt", "Stop", "SessionEnd"}:
             # Append-only machine receipts; do not copy chat/tool text or infer completed actions.
@@ -797,7 +890,10 @@ def main():
     child.add_argument("--candidate", help="verified historical backup with the same bytes at --candidate-offset")
     child.add_argument("--candidate-offset", type=int, default=0)
     child = commands.add_parser("usage")
-    child.add_argument("--transcript", required=True)
+    child.add_argument("--transcript")
+    child.add_argument("--project")
+    child.add_argument("--task")
+    child.add_argument("--session")
     child.add_argument("--limit", type=int)
     child = commands.add_parser("cost")
     child.add_argument("--transcript", required=True)
@@ -844,7 +940,9 @@ def main():
         elif args.command == "cost":
             result = cost(args.transcript)
         elif args.command == "usage":
-            result = usage(args.transcript, args.limit)
+            require(bool(args.transcript) != bool(args.project or args.task or args.session), "choose --transcript or --project/--task/--session")
+            require(args.transcript or all((args.project, args.task, args.session)), "project, task and session required")
+            result = usage(args.transcript, args.limit) if args.transcript else task_usage(args.project, args.task, args.session, args.limit)
         else:
             raw = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
             require(len(raw) <= 2 * 1024 * 1024, "hook input exceeds budget")

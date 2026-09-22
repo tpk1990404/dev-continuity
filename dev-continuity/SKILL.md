@@ -2,7 +2,7 @@
 name: dev-continuity
 description: Maintain resumable development checkpoints, trace decisions to source records, and transfer unfinished work across conversations. Use for long development tasks, context pressure, interruption recovery, or handoff; skip routine one-step edits and unrelated questions.
 metadata:
-  version: "1.4.0"
+  version: "1.5.0"
 ---
 
 # 开发连续性
@@ -20,8 +20,9 @@ metadata:
 ## 当前与历史
 
 - critical 表示本次恢复必须读，包含当前目标、权限、禁止、未知操作和验收边界。重要历史保留可查；不把每次完成证据永久列为当前关键项。
+- 每次实质更新同时核对 goal/progress/decisions/evidence/next：实际已构建不能仍写未构建；用户临时在线不是永久事实。临时观察用 validation/valid_until，过期须核实并替代，不自动删除限制或推定授权。
 - 同 scope 的重复要求先核对原意，再以保留全部必要约束和原文来源的 supersedes 合并；用户要求/决策不能直接退役。版本状态用稳定 scope/status_key 替代；完成验证/操作可带原因退役。历史不能重新指导当前 next。
-- 短入口只留当前状态与权威链接，不追加发布流水；历史放既有日志/归档。核对完整必读集合的成本，不把重复内容藏在后页。超过80%容量先整理；必要约束确实无法缩小时，复核中说明原因后才能新交接，不截断约束。
+- 短入口只留当前状态与权威链接，不追加发布流水；历史放既有日志/归档。超过80%容量先整理，必要约束无法缩小时说明原因；超过95%禁止新交接，留下一步更新余量，不截断约束。全部记录都标关键时重新判断完成证据与临时状态。
 - 会改写的来源用 --retain-sources 保留已核验非敏感原文片段；不是保存整个文件或聊天。verify 校验当前和归档链，verify --history 按需检查历史原文；校验通过仍不证明语义完整或时效。
 - 归档先落盘再发布入口；未知/在途操作保持当前，先查回执。已成功操作及历史 ID 不复用；锁冲突不擅删，失败保留上一检查点。
 
@@ -31,7 +32,9 @@ metadata:
 
 尚有已授权且独立可做的事项就继续；人工、费用或新业务决定只暂停依赖动作。用户停止优先，目标完成保存 completed=true，不自行新增目标。
 
-70%/80%近期用量仅提示整理/评估，未知不猜比例，不以累计token或账户额度当上下文。压缩先发生则恢复继续。确需迁移时复核内容与来源，预约一次 → 记录真实新任务 → 释放旧写入权 → 接棒执行 next；结果不明先查，不重复创建或并发写入。
+70%整理；80%、新压缩或批次切换后的下一安全节点，检查实际接续工具，记录 migrate/defer/unavailable、理由与下一复核节点。有已授权独立下一步、工具可用、无未决创建且内容复核通过时执行一次接棒；否则保留明确阻塞或有限暂缓，不无限沿用“暂不必要”。新事实/压缩后重核；工具未变化不反复搜索。参考中的 memory_review.continuation 保留决策，不能只口头宣称可接棒。
+
+用 usage --project/--task/--session 跟随当前日志；unknown 不是余量充足，不猜比例。压缩先发生则恢复继续，到安全节点再判断。复核后预约一次 → 记录真实新任务 → 释放旧写入权 → 接棒执行 next；结果不明先查，不重复创建或并发写入。百分比不单独授权创建，目标完成或无独立下一步时不空转。
 
 continuation_settings 仅登记有用户依据的 model/thinking；创建时显式传递已确认选择，并核对首轮实际设置。无明确选择则省略，不能从旧模型猜偏好或改全局默认。新任务取得实质进展前不再迁移。
 

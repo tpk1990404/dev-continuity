@@ -8,6 +8,13 @@ dev-continuity is an independent community skill for long development tasks, int
 
 This is not an OpenAI product, infinite memory, a background agent, or a promise of uninterrupted execution.
 
+## What's new in 1.5.0
+
+- Bounded adaptive usage reads recover fresh samples hidden behind large image/tool payloads. Project-based usage follows the current owner's transcript after rotation.
+- Migration decisions record migrate/defer/unavailable, actual tool capability, a reason and the next review point. New compaction requires another safe-boundary review.
+- New handoffs require acknowledgement of cross-checking goal, progress, decisions, evidence and next steps. Temporary observations may expire; original records remain searchable.
+- All-critical collections are flagged for review, and notes above 95% capacity cannot start a new handoff. Schema 4 prevents older writers from ignoring these semantics. See [upgrade details](CHANGELOG.md#150--2026-09-22).
+
 ## What it does
 
 - Records goals, acceptance criteria, finite batches, progress, constraints, uncertain operations, and next steps.
@@ -78,7 +85,9 @@ Use a full note with `--expected new` and no `--patch` for initial registration.
 
 Data lives in the registered project's `.dev-continuity/`: immutable checkpoints, source slices, session mappings, handoff prompts, and hook events. Scripts make no network calls. Nevertheless, notes, paths, retained text, and command output may contain private information. Keep this directory, installation plans, and backups out of public repositories. Secret detection is intentionally limited and is not automatic redaction.
 
-The note limit is 48 KiB. At 80%, a new handoff requires consolidation or a specific justification for retaining necessary constraints. Hooks sample compatible recent usage logs; the 70%/80% signals are estimates, not exact compaction deadlines. `PreCompact` does not write a semantic handoff for you. Missing data stays unknown.
+The note limit is 48 KiB. Above 80%, a new handoff requires consolidation or a specific justification; above 95%, it is blocked to leave update headroom. Usage starts with a 256 KiB tail and expands to at most an 8 MiB range when needed, skipping large image/tool lines. Unknown reasons remain explicit and never imply low pressure. These reads do not add model calls.
+
+At 70%, consolidate. At 80%, after compaction or at a batch transition, record a migration decision at the next safe boundary. When authorization, independent remaining work, host tools and review are present, perform one handoff. Otherwise record the blocker or bounded deferral and recheck when the stated condition changes. Percentages alone do not authorize creation. `PreCompact` records machine state; semantic review still requires the agent.
 
 `verify --history` can report current state as valid while returning exit code 1 for missing historical originals. Smaller files do not establish net token or monetary savings.
 
@@ -93,6 +102,8 @@ python3 install.py restore --file /path/to/receipt.json
 
 CI targets Windows/Ubuntu and Python 3.11/3.14. It does not prove every Codex host's hook or task-creation integration. macOS is not included in this CI matrix.
 
-Restore refuses to overwrite files changed after installation. Supply the original `--home`/`--skill-dir` options when applicable. Schemas 1/2 are readable; new saves use schema 3. Restoring old skill files does not make it safe to roll back task state or replay completed operations.
+Restore refuses to overwrite files changed after installation. Supply the original `--home`/`--skill-dir` options when applicable. Version 1.5 reads schemas 1/2/3/4; new saves and transfer writes use schema 4. Installation does not rewrite task data. Existing policy 1/2 reservations retain their checks; new reservations use policy 3 and `new_handoff_ready`, including the explicit decision and cross-field acknowledgement. This acknowledgement is not automated proof of semantic correctness.
+
+After schema 4 writes, do not resume the task with 1.4 or roll back its state pointer. Restore a compatible skill and preserve all subsequent progress. Restoring skill files does not authorize task-state rollback or replay.
 
 Use [Issues](https://github.com/tpk1990404/dev-continuity/issues) for reproducible bugs and proposals, and private security reporting for sensitive findings. Licensed under the [MIT License](LICENSE).

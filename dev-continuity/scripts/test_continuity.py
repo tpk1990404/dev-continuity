@@ -36,7 +36,12 @@ class ContinuityTest(unittest.TestCase):
     def review(self, owner, revision):
         check = c.verify(self.root, "task")
         return c.save(self.root, "task", owner, {"memory_review": {
-            "basis_sha256": check["memory_basis_sha256"], "critical_ids": check["critical_ids"]}}, revision, patch=True)["revision"]
+            "basis_sha256": check["memory_basis_sha256"], "critical_ids": check["critical_ids"],
+            "checked_sections": c.REVIEW_SECTIONS, "continuation": self.decision()}}, revision, patch=True)["revision"]
+
+    def decision(self, decision="migrate", tools="available"):
+        return {"decision": decision, "tools": tools, "reason": "Synthetic safe batch boundary",
+                "next_check": "After the next material progress update or compaction", "at": c.now()}
 
     def saved(self):
         revision = c.save(self.root, "task", "old", self.note, "new")["revision"]
@@ -428,6 +433,7 @@ class ContinuityTest(unittest.TestCase):
         check = c.verify(self.root,'task')
         revision = c.save(self.root,'task','old',{'memory_review':{
             'basis_sha256':check['memory_basis_sha256'],'critical_ids':check['critical_ids'],
+            'checked_sections':c.REVIEW_SECTIONS,'continuation':self.decision(),
             'capacity_reason':'Essential active incident evidence; no settled facts remain to archive.'}},revision,patch=True)['revision']
         self.assertEqual(c.transfer(self.root,'task','old',revision,'prepare')['handoff']['phase'],'REQUESTED')
 
@@ -522,6 +528,111 @@ class ContinuityTest(unittest.TestCase):
             value=json.loads(runtime.read_text());value['checked_at']=0;runtime.write_text(json.dumps(value))
             self.assertEqual(c.hook(payload),{})
         self.assertTrue(c.hook({**payload,'hook_event_name':'SessionStart','source':'compact'}))
+
+    def test_image_payload_does_not_hide_fresh_usage_and_scan_is_bounded(self):
+        path = self.sample()
+        with path.open('ab') as stream:
+            stream.write(json.dumps({'type':'response_item','payload':{'image':'x' * (3 * 1024 * 1024)}}).encode() + b'\n')
+        self.assertEqual(c.usage(path)['used'], 85)
+        self.assertGreater(c.usage(path)['scanned_bytes'], c.TAIL)
+        with path.open('ab') as stream:
+            stream.write(b'x' * c.MAX_USAGE_SCAN)
+        result = c.usage(path)
+        self.assertEqual(result['reason'], 'scan_limit')
+        self.assertLessEqual(result['scanned_bytes'], c.MAX_USAGE_SCAN)
+        self.assertNotIn('remaining_percent_estimate', result)
+        self.sample((datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat())
+        self.assertEqual(c.usage(path)['reason'], 'stale_or_future_sample')
+
+    def test_usage_resolves_current_segment_and_unknown_warning_is_deduplicated(self):
+        self.saved()
+        first = self.sample()
+        payload = {'cwd':str(self.root),'session_id':'old','hook_event_name':'PostToolUse','transcript_path':str(first)}
+        c.hook(payload)
+        second = self.root / 'new-segment.jsonl'
+        second.write_bytes(first.read_bytes())
+        first.unlink()
+        c.hook({**payload,'hook_event_name':'SessionStart','transcript_path':str(second)})
+        self.assertEqual(c.task_usage(self.root,'task','old')['used'],85)
+        with self.assertRaisesRegex(ValueError,'owner'):
+            c.task_usage(self.root,'task','another')
+        with self.assertRaisesRegex(ValueError,'threshold'):
+            c.task_usage(self.root,'task','old',0)
+        second.write_bytes(b'no compatible sample')
+        runtime = self.root / '.dev-continuity/task/runtime-old.json'
+        for expected in [True,False]:
+            state = json.loads(runtime.read_text());state['checked_at']=0;runtime.write_text(json.dumps(state))
+            self.assertEqual(bool(c.hook({**payload,'transcript_path':str(second)})),expected)
+
+    def test_decision_requires_capability_semantic_review_and_fresh_basis(self):
+        revision = self.saved()
+        self.assertTrue(c.verify(self.root,'task')['new_handoff_ready'])
+        for decision,tools in [('defer','available'),('unavailable','unavailable'),('migrate','unknown')]:
+            check=c.verify(self.root,'task')
+            review={'basis_sha256':check['memory_basis_sha256'],'critical_ids':check['critical_ids'],
+                    'checked_sections':c.REVIEW_SECTIONS,'continuation':self.decision(decision,tools)}
+            revision=c.save(self.root,'task','old',{'memory_review':review},revision,patch=True)['revision']
+            self.assertFalse(c.verify(self.root,'task')['new_handoff_ready'])
+            with self.assertRaisesRegex(ValueError,'record a current migrate'):
+                c.transfer(self.root,'task','old',revision,'prepare')
+        revision=self.review('old',revision)
+        revision=c.save(self.root,'task','old',{'next':['a changed next action']},revision,patch=True)['revision']
+        self.assertFalse(c.verify(self.root,'task')['continuation_review']['current'])
+        revision=self.review('old',revision)
+        note,_=c.load(self.root,'task');review=note['note']['memory_review'];review.pop('checked_sections')
+        revision=c.save(self.root,'task','old',{'memory_review':review},revision,patch=True)['revision']
+        self.assertTrue(c.verify(self.root,'task')['handoff_ready'])
+        self.assertFalse(c.verify(self.root,'task')['new_handoff_ready'])
+
+    def test_expired_observation_blocks_handoff_without_erasing_user_constraints(self):
+        until=(datetime.now(timezone.utc)+timedelta(minutes=1)).isoformat()
+        self.note['records'].append(self.record('online','User is temporarily online',kind='validation',
+                                                valid_until=until,status_key='availability'))
+        revision=self.saved()
+        with patch.object(c.time,'time',return_value=c.timestamp(until)+1):
+            check=c.verify(self.root,'task')
+            self.assertFalse(check['ok'])
+            self.assertFalse(check['new_handoff_ready'])
+            self.assertIn('expired_observation',str(check['issues']))
+            self.assertTrue(c.lookup(self.root,'task','online','records')['found'])
+        replacement=self.record('offline','Availability must be checked again',kind='validation',
+            valid_until=(datetime.now(timezone.utc)+timedelta(minutes=2)).isoformat(),status_key='availability',reason='New user status')
+        c.save(self.root,'task','old',{'records':[replacement]},revision,patch=True,archive_superseded=True)
+        self.assertTrue(c.lookup(self.root,'task','online','records')['historical'])
+        self.assertFalse(c.lookup(self.root,'task','boundary','records')['historical'])
+
+    def test_legacy_pending_handoff_completes_without_rewriting_its_review(self):
+        revision=self.saved()
+        revision=c.transfer(self.root,'task','old',revision,'prepare')['revision']
+        value,_=c.load(self.root,'task');value['version']=3;value['handoff']['memory_policy']=2
+        value['note']['memory_review'].pop('checked_sections');value['note']['memory_review'].pop('continuation')
+        _,directory=c.store(self.root,'task');revision=c.publish(directory,value)
+        self.assertEqual(c.load(self.root,'task')[0]['version'],3)
+        for action in ['target','release','accept']:
+            revision=c.transfer(self.root,'task','new' if action=='accept' else 'old',revision,action,successor='new')['revision']
+        value,_=c.load(self.root,'task')
+        self.assertEqual(value['version'],4)
+        self.assertEqual(value['owner'],'new')
+        self.assertEqual(value['handoff']['phase'],'ACCEPTED')
+
+    def test_compaction_invalidates_deferral_and_capacity_exception_has_ceiling(self):
+        revision=self.saved()
+        payload={'cwd':str(self.root),'session_id':'old','hook_event_name':'SessionStart','transcript_path':str(self.sample())}
+        c.hook(payload)
+        c.hook({**payload,'hook_event_name':'PreCompact'})
+        runtime=self.root/'.dev-continuity/task/runtime-old.json'
+        self.assertTrue(json.loads(runtime.read_text())['continuation_review']['due_at_safe_boundary'])
+        revision=self.review('old',revision)
+        c.hook(payload)
+        self.assertFalse(json.loads(runtime.read_text())['continuation_review']['due_at_safe_boundary'])
+        value,_=c.load(self.root,'task')
+        padding='x'*(c.MAX_NOTE-len(c.encode(value['note']))-500)
+        revision=c.save(self.root,'task','old',{'evidence':[padding]},revision,patch=True)['revision']
+        revision=self.review('old',revision)
+        value,_=c.load(self.root,'task');review=value['note']['memory_review'];review['capacity_reason']='Retained pending review'
+        revision=c.save(self.root,'task','old',{'memory_review':review},revision,patch=True)['revision']
+        with self.assertRaisesRegex(ValueError,'5%'):
+            c.transfer(self.root,'task','old',revision,'prepare')
 
 
 if __name__ == "__main__":

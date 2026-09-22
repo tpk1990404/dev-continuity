@@ -31,7 +31,10 @@ with tempfile.TemporaryDirectory(prefix='continuity-demo-') as folder:
     assert c.read_source(anchor, root).decode('utf8').startswith('Synthetic request:')
     check = c.verify(root, 'demo')
     rev = c.save(root, 'demo', 'simulated-old', {'memory_review': {
-        'basis_sha256': check['memory_basis_sha256'], 'critical_ids': check['critical_ids']}}, rev, patch=True)['revision']
+        'basis_sha256': check['memory_basis_sha256'], 'critical_ids': check['critical_ids'],
+        'checked_sections': c.REVIEW_SECTIONS,
+        'continuation': {'decision':'migrate','tools':'available','reason':'Offline simulation only',
+                         'next_check':'After simulated successor progress','at':c.now()}}}, rev, patch=True)['revision']
     for action in ('prepare', 'target', 'release', 'accept'):
         session = 'simulated-new' if action == 'accept' else 'simulated-old'
         result = c.transfer(root, 'demo', session, rev, action, successor='simulated-new' if action == 'target' else None)
