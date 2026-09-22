@@ -15,6 +15,7 @@ Fixes demonstrated during long-running task audits. No private task records, tra
 ### Validation and cost boundaries
 
 - Regression coverage includes large image output, bounded scans, stale samples, transcript changes, unavailable tools, stale decisions, expired observations, capacity limits and completing an existing legacy handoff.
+- The installer smoke test allows cold PowerShell startup on hosted Windows runners; production hook timeouts are unchanged.
 - Hooks retain throttling and deduplication, add no model calls and do not create tasks themselves. One upgrade hint asks active owners to reload the Skill at a safe boundary.
 - Semantic review is an acknowledgement, not a claim of automatically detecting every contradiction. No claim of measured net token savings or guaranteed uninterrupted execution.
 

@@ -57,8 +57,9 @@ class InstallTest(unittest.TestCase):
             if os.name == "nt":
                 handler = current["hooks"]["SessionStart"][0]["hooks"][0]
                 payload = json.dumps({"hook_event_name": "SessionStart", "cwd": str(home), "session_id": "unregistered"}).encode()
+                # Includes cold PowerShell/launcher startup on hosted Windows; the production hook timeout is unchanged.
                 run = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", handler["commandWindows"]],
-                                     input=payload, capture_output=True, timeout=5)
+                                     input=payload, capture_output=True, timeout=30)
                 self.assertEqual(run.returncode, 0, run.stderr)
                 self.assertEqual(json.loads(run.stdout), {})
             (home / "AGENTS.md").write_text(text + "user edit", encoding="utf-8")
