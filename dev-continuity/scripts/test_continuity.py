@@ -26,6 +26,53 @@ class ContinuityTest(unittest.TestCase):
                      "next": ["verify"], "blockers": [], "files": ["a.txt"], "sources": []}
         (self.root / "request.txt").write_bytes(b"Preserve dirty work. Never repeat a paid operation.\n")
         self.note["records"] = [self.record("boundary", "Preserve dirty work; no repeated paid calls.")]
+        self.runtime("old")
+
+    def runtime(self, session, effort="high"):
+        transcript = self.root / (session + ".jsonl")
+        transcript.write_text(json.dumps({"type": "session_meta", "payload": {"id": session}}) + "\n" +
+                              json.dumps({"type": "turn_context", "timestamp": c.now(),
+                                          "payload": {"effort": effort, "model": "example-model"}}) + "\n", encoding="utf8")
+        _, directory = c.store(self.root, "task")
+        c.atomic(directory / ("runtime-" + session + ".json"), c.encode({"transcript": {"path": str(transcript)}}))
+        return transcript
+
+    def test_runtime_thinking_inherited_and_frozen_across_transfer(self):
+        transcript = self.runtime("old", "xhigh")
+        with transcript.open("a", encoding="utf8") as stream:
+            stream.write(json.dumps({"type": "turn_context", "timestamp": c.now(), "payload": {"effort": "high"}}) + "\n")
+        revision = self.saved()
+        result = c.transfer(self.root, "task", "old", revision, "prepare")
+        self.assertEqual(result["continuation_settings"], {"thinking": "high"})
+        self.assertEqual(result["handoff"]["settings_source"]["session"], "old")
+        self.runtime("old", "low")  # Creation and later phases must use the same frozen request.
+        for action in ("target", "release", "accept"):
+            result = c.transfer(self.root, "task", "new" if action == "accept" else "old",
+                                result["revision"], action, successor="new")
+            self.assertEqual(result["continuation_settings"], {"thinking": "high"})
+
+    def test_runtime_settings_missing_mismatched_or_unknown_do_not_reserve(self):
+        revision = self.saved()
+        for mode in ("missing", "wrong-session", "unknown", "scan-limit"):
+            with self.subTest(mode=mode):
+                transcript = self.runtime("old", "unsupported" if mode == "unknown" else "high")
+                if mode == "missing":
+                    transcript.unlink()
+                elif mode == "wrong-session":
+                    transcript.write_text(transcript.read_text(encoding="utf8").replace('"old"', '"another"'), encoding="utf8")
+                elif mode == "scan-limit":
+                    with transcript.open("ab") as stream:
+                        stream.write(b' ' * (c.MAX_USAGE_SCAN + 1))
+                with self.assertRaisesRegex(ValueError, "cannot inherit thinking"):
+                    c.transfer(self.root, "task", "old", revision, "prepare")
+                self.assertEqual(c.load(self.root, "task")[1], revision)
+
+    def test_explicit_choice_and_default_reset_override_runtime(self):
+        _, directory = c.store(self.root, "task")
+        for explicit, expected in (({"thinking": "medium"}, {"thinking": "medium"}), ({}, {}),
+                                   ({"model": "user-selected"}, {"model": "user-selected", "thinking": "high"})):
+            result, _ = c.resolve_settings({"continuation_settings": {**explicit, "source_record": "user-choice"}}, directory, "old")
+            self.assertEqual(result, expected)
 
     def record(self, key, text, **kwargs):
         source = self.root / "request.txt"
@@ -246,6 +293,7 @@ class ContinuityTest(unittest.TestCase):
         revision = self.saved()
         owner = "old"
         for n in range(5):
+            self.runtime(owner)
             revision = c.transfer(self.root, "task", owner, revision, "prepare")["revision"]
             successor = "successor-" + str(n)
             revision = c.transfer(self.root, "task", owner, revision, "target", successor)["revision"]

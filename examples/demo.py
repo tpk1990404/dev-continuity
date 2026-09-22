@@ -35,9 +35,14 @@ with tempfile.TemporaryDirectory(prefix='continuity-demo-') as folder:
         'checked_sections': c.REVIEW_SECTIONS,
         'continuation': {'decision':'migrate','tools':'available','reason':'Offline simulation only',
                          'next_check':'After simulated successor progress','at':c.now()}}}, rev, patch=True)['revision']
+    transcript = root / 'synthetic-session.jsonl'
+    transcript.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'simulated-old'}}) + '\n' +
+                          json.dumps({'type': 'turn_context', 'timestamp': c.now(), 'payload': {'effort': 'high'}}) + '\n', encoding='utf8')
+    c.hook({'cwd': str(root), 'session_id': 'simulated-old', 'hook_event_name': 'SessionStart', 'transcript_path': str(transcript)})
     for action in ('prepare', 'target', 'release', 'accept'):
         session = 'simulated-new' if action == 'accept' else 'simulated-old'
         result = c.transfer(root, 'demo', session, rev, action, successor='simulated-new' if action == 'target' else None)
+        assert result['continuation_settings'] == {'thinking': 'high'}
         rev = result['revision']
     final = c.verify(root, 'demo', history=True)
     assert final['ok'] and final['history']['ok']

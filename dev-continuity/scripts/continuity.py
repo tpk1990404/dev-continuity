@@ -14,7 +14,7 @@ import time
 import uuid
 
 VERSION = 4
-SKILL_VERSION = "1.5.0"
+SKILL_VERSION = "1.5.1"
 MAX_NOTE = 48 * 1024
 TAIL = 256 * 1024
 MAX_USAGE_SCAN = 8 * 1024 * 1024
@@ -568,6 +568,42 @@ def recall(project, task, query="", offset=0, limit=8, history=False, revision=N
     return result
 
 
+def resolve_settings(note, directory, session):
+    """Resolve once at prepare; never treat missing evidence as a default choice."""
+    explicit = note.get("continuation_settings", {})
+    settings = {k: v for k, v in explicit.items() if k != "source_record"}
+    if "thinking" in settings or (explicit and not settings):
+        return settings, {"kind": "user", "source_record": explicit["source_record"]}
+    runtime_path = directory / ("runtime-" + session + ".json")
+    runtime = bounded_json(runtime_path) if runtime_path.exists() else {}
+    transcript = runtime.get("transcript", {}).get("path")
+    require(transcript, "cannot inherit thinking: current owner transcript unavailable; verify runtime or record a user choice")
+    try:
+        with Path(transcript).open("rb") as stream:
+            header = json.loads(stream.readline(64 * 1024))
+            require(header.get("type") == "session_meta" and header.get("payload", {}).get("id") == session,
+                    "cannot inherit thinking: transcript session mismatch")
+            stream.seek(0, 2)
+            start = max(0, stream.tell() - MAX_USAGE_SCAN)
+            stream.seek(start)
+            lines = stream.read(MAX_USAGE_SCAN).splitlines()
+        for line in reversed(lines[1:] if start else lines):
+            if b'"turn_context"' not in line:
+                continue
+            event = json.loads(line)
+            if event.get("type") != "turn_context":
+                continue
+            effort = event.get("payload", {}).get("effort")
+            require(effort in {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
+                    "cannot inherit thinking: latest turn has unknown effort; do not reuse an older value")
+            settings["thinking"] = effort
+            return settings, {"kind": "runtime", "session": session, "timestamp": event.get("timestamp"),
+                              "path": str(Path(transcript).resolve()), "sha256": digest(line)}
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("cannot inherit thinking: transcript unavailable or malformed; verify runtime or record a user choice") from error
+    raise ValueError("cannot inherit thinking: no turn_context within bounded scan; verify runtime or record a user choice")
+
+
 def transfer(project, task, session, expected, action, successor=None, cancel_receipt=None):
     root, directory = store(project, task)
     with lock(directory):
@@ -590,7 +626,9 @@ def transfer(project, task, session, expected, action, successor=None, cancel_re
                         "consolidate current memory or record why remaining essential constraints require this capacity")
             require(check["new_handoff_ready"],
                     "review goal/progress/decisions/evidence/next and record a current migrate decision with available host tools")
-            handoff = {"phase": "REQUESTED", "request_id": str(uuid.uuid4()), "from": session, "memory_policy": 3}
+            settings, settings_source = resolve_settings(value["note"], directory, session)
+            handoff = {"phase": "REQUESTED", "request_id": str(uuid.uuid4()), "from": session, "memory_policy": 3,
+                       "continuation_settings": settings, "settings_source": settings_source}
             text = (f"继续已授权的同一开发目标：{value['note']['goal']}\n"
                     f"项目：{root}\n任务：{task}\n接棒预约：{handoff['request_id']}\n"
                     f"检查点入口：{directory / 'latest.json'}\n"
@@ -600,9 +638,8 @@ def transfer(project, task, session, expected, action, successor=None, cancel_re
                     "核验后 accept 并直接执行 next，不等用户转发提示词或回复继续。"
                     "不要重复外部操作，不新增目标，不把创建回执当成交接完成。\n"
                     f"当前有限批次：{json.dumps(value['note']['batch'], ensure_ascii=False)}\n")
-            settings = {k: v for k, v in value["note"].get("continuation_settings", {}).items() if k != "source_record"}
             if settings:
-                text += f"create_thread 已确认设置：{json.dumps(settings, ensure_ascii=False)}；创建时显式传递，接棒核对实际首轮设置。\n"
+                text += f"create_thread 接续设置：{json.dumps(settings, ensure_ascii=False)}；创建时显式传递；接棒核对实际首轮设置，不符则先修正，不接受写入权。\n"
             atomic(directory / "handoff-prompt.md", text.encode("utf-8"))
         elif action == "target":
             require(phase == "REQUESTED", "target already recorded or creation not reserved")
@@ -632,7 +669,7 @@ def transfer(project, task, session, expected, action, successor=None, cancel_re
         value["updated"] = now()
         revision = publish(directory, value)
     return {"revision": revision, "handoff": handoff,
-            "continuation_settings": {k: v for k, v in value["note"].get("continuation_settings", {}).items() if k != "source_record"}}
+            "continuation_settings": handoff.get("continuation_settings", {k: v for k, v in value["note"].get("continuation_settings", {}).items() if k != "source_record"})}
 
 
 def make_anchor(path, offset, length):
@@ -834,7 +871,7 @@ def hook(payload):
                 message = "开发连续性：用量未知（" + sample["reason"] + "），不等于余量充足；下一安全节点核对当前日志及接续能力。"
             runtime["unknown_reason"] = sample.get("reason") if sample["status"] == "unknown" else None
         if event in {"SessionStart", "PostToolUse"} and runtime.get("guidance_version") != SKILL_VERSION:
-            message = "开发连续性已升级1.5.0；下一安全节点重读本机SKILL.md，核对过期状态及迁移决定。" + (message or "")
+            message = f"开发连续性已升级{SKILL_VERSION}；下一安全节点重读本机SKILL.md，核对过期状态及迁移决定。" + (message or "")
             runtime["guidance_version"] = SKILL_VERSION
         atomic(runtime_path, encode(runtime))
         if event in {"PreCompact", "Interrupt", "Stop", "SessionEnd"}:

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.1 — 2026-09-22
+
+- Fixed omitted `thinking` during handoff: explicit user settings take priority; otherwise preparation inherits the current owner's latest `turn_context.effort` from its runtime transcript. An explicit user request to restore defaults remains supported. Model overrides still require an explicit user choice.
+- Preparation checks transcript session identity, reads at most an 8 MiB tail plus a bounded header, and rejects missing/unknown evidence before reserving a successor. It never falls back to an older effort when the latest turn has an unsupported value.
+- Resolved settings and their source are frozen in the handoff receipt and returned throughout target/release/accept. Host creation must pass these values, and actual successor settings must be checked before accepting ownership. The script does not itself control the host or enforce this host-level check.
+- Regression tests cover latest effort changes, frozen settings, explicit overrides/default reset, missing or mismatched transcripts, unknown effort and scan bounds. The offline demonstration now exercises inherited `high`.
+- Schema 4 and policy 3 remain compatible; existing pending handoffs retain their previous behavior. Installation does not rewrite project state or global defaults. No dependencies, polling or model calls were added; no measured token-savings claim is made.
+
 ## 1.5.0 — 2026-09-22
 
 Fixes demonstrated during long-running task audits. No private task records, transcripts or account data are included.

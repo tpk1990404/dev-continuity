@@ -8,7 +8,13 @@ dev-continuity is an independent community skill for long development tasks, int
 
 This is not an OpenAI product, infinite memory, a background agent, or a promise of uninterrupted execution.
 
-## What's new in 1.5.0
+## What's new in 1.5.1
+
+- Preserve the current owner's latest observed reasoning effort when no explicit user choice was recorded, instead of silently using the app default (for example, `high` becoming `xhigh`).
+- Freeze resolved settings at reservation and return them throughout transfer. Missing or unverifiable evidence blocks reservation, retaining the original writer. Model overrides still require an explicit user choice.
+- Bounded local reads occur only at preparation; no extra model calls or polling. Existing checkpoints need no migration. See [release notes](CHANGELOG.md#151--2026-09-22).
+
+### What's new in 1.5.0
 
 - Bounded adaptive usage reads recover fresh samples hidden behind large image/tool payloads. Project-based usage follows the current owner's transcript after rotation.
 - Migration decisions record migrate/defer/unavailable, actual tool capability, a reason and the next review point. New compaction requires another safe-boundary review.
@@ -22,7 +28,7 @@ This is not an OpenAI product, infinite memory, a background agent, or a promise
 - Archives completed evidence while preserving original records and operation receipts.
 - Retains optional, reviewed source slices up to 16 KiB and verifies them by SHA-256.
 - Transfers ownership through `REQUESTED → TARGET_RECORDED → RELEASED → ACCEPTED`.
-- Carries only model/reasoning choices supported by explicit user evidence.
+- Carries explicit user choices, otherwise inherits verified current reasoning effort; model overrides require explicit user evidence.
 - Distinguishes current-state validity, historical source availability, and actual business acceptance.
 
 The checkpoint lock does not lock all application files. New Codex tasks require host tools and user authorization; the Python script cannot create conversations on its own.
