@@ -412,6 +412,8 @@ class ContinuityTest(unittest.TestCase):
 
     def test_brief_utf8_paging_and_capacity_diagnostics(self):
         self.note["goal"] = "继续已授权工作"
+        self.note["decisions"] = ["Keep queued delivery: the earlier synchronous attempt timed out; see decision-1."]
+        self.note["evidence"] = ["Local retry check passed; provider delivery remains unverified."]
         self.note["records"].extend(self.record("extra-" + str(i), "Important fact " + str(i)) for i in range(10))
         revision = self.saved()
         first = c.recall(self.root, "task", detail=False)
@@ -419,13 +421,44 @@ class ContinuityTest(unittest.TestCase):
         self.assertEqual(last["remaining_critical_ids"], [])
         self.assertNotIn("unread_critical_ids", last)
         self.assertNotIn("sources", first["records"][0])
+        self.assertEqual(first["current"]["decisions"], self.note["decisions"])
+        self.assertEqual(first["current"]["evidence"], self.note["evidence"])
+        self.assertNotIn("current", last)
         self.assertIn("sources", c.recall(self.root, "task", detail=True)["records"][0])
         run = subprocess.run([sys.executable, str(Path(c.__file__)), "recall", "--project", str(self.root), "--task", "task"],
                              capture_output=True, check=True, env={**os.environ, "PYTHONIOENCODING": "gbk"})
         self.assertIn("继续已授权工作", run.stdout.decode("utf-8"))
+        self.assertEqual(json.loads(run.stdout)["current"]["decisions"], self.note["decisions"])
         with self.assertRaisesRegex(ValueError, "field_bytes"):
             c.save(self.root, "task", "old", {"next": ["x" * c.MAX_NOTE]}, revision, patch=True)
         self.assertEqual(c.load(self.root, "task")[1], revision)
+
+    def test_full_scope_reference_survives_handoff_and_detects_plan_change(self):
+        plan = self.root / "requirements.txt"
+        plan.write_text("R1: login; R2: offline retry remains pending.\n", encoding="utf8")
+        self.note["goal"] = "Deliver R1 and R2; authoritative scope: requirements.txt"
+        self.note["batch"]["scope"] = "R1 only; R2 remains in requirements.txt"
+        self.note["progress"] = {"done": ["R1"], "active": "R2", "remaining": ["R2"]}
+        self.note["records"].append(self.record("full-scope", "R1 and R2 remain required; requirements.txt",
+            kind="requirement", scope="requirements", sources=[c.make_anchor(plan, 0, plan.stat().st_size)],
+            depends_on={"requirements.txt": c.file_hash(self.root, "requirements.txt")}))
+        revision = c.save(self.root, "task", "old", self.note, "new", retain_sources=True)["revision"]
+        revision = self.review("old", revision)
+        for action in ("prepare", "target", "release", "accept"):
+            result = c.transfer(self.root, "task", "new" if action == "accept" else "old", revision, action, successor="new")
+            revision = result["revision"]
+        restored = c.recall(self.root, "task", detail=False)["current"]
+        self.assertEqual(restored["goal"], self.note["goal"])
+        self.assertEqual(restored["progress"]["remaining"], ["R2"])
+        self.assertFalse(restored["completed"])
+        plan.write_text("R1: login; R2: offline retry; R3: export.\n", encoding="utf8")
+        check = c.verify(self.root, "task")
+        self.assertFalse(check["ok"])
+        self.assertFalse(check["new_handoff_ready"])
+        # Retained old text is available, but cannot establish the current scope.
+        self.assertIn("R2", c.read_source(self.note["records"][-1]["sources"][0], self.root).decode("utf8"))
+        with self.assertRaises(ValueError):
+            c.transfer(self.root, "task", "new", revision, "prepare")
 
     def test_legacy_archive_migration_and_unknown_retirement_rejected(self):
         self.note["record_archives"] = []

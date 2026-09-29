@@ -8,7 +8,14 @@ dev-continuity is an independent community skill for long development tasks, int
 
 This is not an OpenAI product, infinite memory, a background agent, or a promise of uninterrupted execution.
 
-## What's new in 1.5.1
+## What's new in 1.6.0
+
+- Recover the complete authorized goal using the project's existing requirements table. Batches reference its entries; batch completion does not establish goal completion. Reconcile scope at relevant changes, batch boundaries and before claiming completion.
+- The first unfiltered recovery page now includes `decisions/evidence`, preserving tradeoffs and verification boundaries. Later pages do not repeat them. Existing fields, schema 4 and policy 3 remain compatible.
+- Keep six essential kinds of memory, save meaningful changes promptly, and retrieve module details on demand. Preserve reasons and failed attempts that source code cannot explain; keep one full record per fact. Native memory helps locate context; current project evidence establishes project state.
+- Regression coverage checks full-scope handoff and changed requirement dependencies. Agents still perform semantic review; this release does not automatically detect all omissions or claim measured net token savings. See [release notes](CHANGELOG.md#160--2026-09-29).
+
+### What's new in 1.5.1
 
 - Preserve the current owner's latest observed reasoning effort when no explicit user choice was recorded, instead of silently using the app default (for example, `high` becoming `xhigh`).
 - Freeze resolved settings at reservation and return them throughout transfer. Missing or unverifiable evidence blocks reservation, retaining the original writer. Model overrides still require an explicit user choice.

@@ -2,6 +2,25 @@
 
 复用项目权威文档。记录只留必要结论和原文 anchor（路径、字节范围、哈希）；缺依据标 unverified，不以自己新写的摘要冒充用户原文。秘密与个人敏感信息不入笔记。
 
+## 从完整目标恢复，不从最近批次猜测
+
+不增加新格式，使用现有字段：
+
+| 信息 | 保存位置 | 恢复时读取 |
+| --- | --- | --- |
+| 完整目标与需求入口 | goal/acceptance；一条 critical requirement 引用已有需求表 | 短入口必读；表在范围变化、批次结束、完成核对时按需查 |
+| 用户要求、纠正 | requirement/constraint/decision + 原文 sources | 当前关键约束必读；其他按模块查询 |
+| 技术取舍及理由 | decisions 短结论/record ID；decision 的 reason 与 sources | 当前步骤涉及的决定及被否决方案 |
+| 完成及验证边界 | progress/evidence 短结论/报告路径；validation | 相关版本与环境；历史完成详情退出必读 |
+| 失败尝试、未解问题 | validation + reason；blockers/next | 触发条件、已有排查、重试前提；未知操作另保留台账 |
+| 当前现场和下一步 | files/preserve/operations/next | 脏文件、在途操作、可执行动作及完成条件 |
+
+需求表每项保留已有编号、当前状态和证据/原因。batch.scope 只列本批条目引用；goal 不收窄为 batch。只有用户明确变更才能取消或后置原目标，外部阻塞不是删除需求的依据。没有现成表时，在现有项目计划中补最短清单，不再造台账。
+
+完整需求入口可用现有 critical requirement 的 sources 引用原文、depends_on 绑定权威表的 SHA-256。表变化会使旧入口校验失败；核对新表、全部仍有效要求及用户纠正后，用同 scope 新 ID 和 reason 显式 supersedes，重新复核。保留片段只证明旧原文，不能绕过依赖变化。不要把经常追加流水的综合日志绑定成范围文件，以免无关更新触发全量复核。
+
+这些是代理的内容核对责任。脚本只检查来源、依赖和复核声明，不会理解需求表或自动发现语义遗漏；没有登记完整范围的旧任务，安装不会自动补齐。
+
 ## 关键记录
 
 records 按 ID 合并，省略或空数组不删除旧记录：
@@ -32,6 +51,8 @@ py -3 -X utf8 SCRIPT operation --project PROJECT --task TASK --id OPERATION_ID
 
 CLI recall 默认短视图，省略完整 anchors/依赖哈希及已完成操作。record / operation 按 ID 查当前和归档，返回历史标记与 revision；找不到或读取失败不能当作“允许再做”。recall --detail 保留 1.2 完整输出；Python recall 默认 detail=True，兼容既有调用。
 
+1.6 首个无 query 页面同时返回 decisions/evidence，避免只恢复进度却遗漏取舍与验证边界；后续页不重复这部分。字段保持短结论和引用，长详情用 record/原文按需查。不要每轮 show 全文、每次都扫描历史或重新读同一 Skill；revision、相关依赖或实际问题变化才补读。项目明确要求完整阅读的文件仍须遵守。
+
 每页默认 8 条。remaining_critical_ids 表示当前查询结果后续页；critical_outside_page_ids 表示不在本页，不能当作累计未读。query 分页不证明覆盖全部关键项。固定 revision，状态变化后重新核对。历史细查用 recall --revision REV --history --query 关键词，不作为当前指令。
 
 ## 增量保存与归档
@@ -59,7 +80,7 @@ py -3 -X utf8 SCRIPT save --project PROJECT --task TASK --session SESSION --expe
 
 ## 交接复核
 
-对照原始要求、纠正和证据，交叉核对 goal/progress/decisions/evidence/next，删除这些当前字段中已过期的“未构建/未定位”等状态，历史快照保留。核对禁止事项、未完成、未验证、不可重复操作和下一步权限；全部记录均关键时重新判断恢复必要性。verify 的 advisory 可提示重复正文，无法识别所有语义矛盾，checked_sections只是人工/代理确认。
+对照原始要求、纠正和证据，交叉核对 goal/progress/decisions/evidence/next；goal 核对包括完整需求入口与本批范围，不能拿本批验收代替完整目标验收。删除当前字段中过期的“未构建/未定位”等状态，历史快照保留。核对禁止事项、未完成、未验证、不可重复操作和下一步权限；全部记录均关键时重新判断恢复必要性。verify 的 advisory 可提示重复正文，无法识别所有语义矛盾，checked_sections只是人工/代理确认。
 
 完成内容核对后，把 verify 的 memory_basis_sha256 和完整 critical_ids 写入小 patch：
 
@@ -83,4 +104,4 @@ source --project PROJECT --input ANCHOR.json --retain 可显式保存某段。�
 
 verify --history 按需审计历史原文，单独返回 history.ok，历史失配也返回非零退出码；当前 ok 与历史原文完整性不能混称。普通 verify 不重复扫描历史原文内容。
 
-schema 1/2/3可读；1.5保存和交接写schema 4，旧脚本拒绝误读，避免忽略过期观察与交接条件。已有memory_policy 1/2预约按原策略完成，不擅改owner；新预约使用policy 3。安装本身不改项目检查点。安装回滚只恢复Skill文件；写过schema 4的任务不能再用旧脚本继续，需保留新进展并恢复兼容版本，不能回退数据指针。
+schema 1/2/3可读；1.5/1.6保存和交接写schema 4，旧脚本拒绝误读，避免忽略过期观察与交接条件。已有memory_policy 1/2预约按原策略完成，不擅改owner；新预约使用policy 3。1.6复用既有字段，不要求数据迁移。安装本身不改项目检查点。安装回滚只恢复Skill文件；写过schema 4的任务不能再用旧脚本继续，需保留新进展并恢复兼容版本，不能回退数据指针。

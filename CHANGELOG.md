@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.6.0 — 2026-09-29
+
+### Memory completeness before cost reduction
+
+- The Skill now explicitly preserves the complete authorized goal across finite batches. It reuses the project's authoritative requirements table and existing critical requirement records, source anchors and dependency hashes. Agents reconcile scope on relevant changes, batch completion and before claiming goal completion; no second requirements database or new schema is introduced.
+- Clarified six essential memory categories, including decision reasons, failed attempts and retry conditions. Material changes trigger incremental saves; unchanged context does not require repeated saves, full-history reads or repeated Skill loading. Relevant detail is retrieved by module/question and original record ID.
+- Native Codex memory is a retrieval aid for stable preferences, lessons and historical pointers. Current project records and live evidence establish task state. The Skill does not directly edit generated memories or grant itself permission to write long-term rules.
+
+### Recovery fix and validation
+
+- The first unfiltered `recall` page now returns the existing `decisions` and `evidence` fields. Previously they were omitted even from the detailed view, making it possible to recover progress without its rationale or verification limits. Pagination and targeted queries avoid repeating those fields.
+- Regression checks cover CLI recovery, non-repeated pagination, a full goal surviving all four handoff phases, and changed authoritative requirements invalidating a dependency-bound critical record even when the old source slice remains readable.
+- Scope reconciliation is an agent instruction, not an automatic semantic coverage detector. Tests establish script behavior, not guaranteed long-term recall. No private audit records or transcripts are distributed, and no net token-savings claim is made.
+
+### Upgrade
+
+- Schema 4, policy 3, setting inheritance, source retention, replay guards and installer defaults are unchanged. Existing checkpoints and pending handoffs require no migration; installation does not mutate project state.
+- Reload the Skill at the next safe boundary. The current writer can then add missing full-scope references using existing records; do not rewrite another active task's checkpoints.
+- No new dependencies, model calls, background scheduler or polling. More complete first-page output has a small payload cost; avoid duplicating long reports in `decisions/evidence`.
+
 ## 1.5.1 — 2026-09-22
 
 - Fixed omitted `thinking` during handoff: explicit user settings take priority; otherwise preparation inherits the current owner's latest `turn_context.effort` from its runtime transcript. An explicit user request to restore defaults remains supported. Model overrides still require an explicit user choice.

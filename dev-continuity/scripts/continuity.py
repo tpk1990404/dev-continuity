@@ -14,7 +14,7 @@ import time
 import uuid
 
 VERSION = 4
-SKILL_VERSION = "1.5.1"
+SKILL_VERSION = "1.6.0"
 MAX_NOTE = 48 * 1024
 TAIL = 256 * 1024
 MAX_USAGE_SCAN = 8 * 1024 * 1024
@@ -553,7 +553,7 @@ def recall(project, task, query="", offset=0, limit=8, history=False, revision=N
               "total_matches": len(rows), "next_offset": offset + len(selected) if offset + len(selected) < len(rows) else None,
               "record_archives": note.get("record_archives", []), "archive_head": note.get("archive_head"), "historical_view": historical_view}
     if not query and offset == 0:
-        result["current"] = {k: note.get(k) for k in ("goal", "acceptance", "progress", "preserve", "operations", "next", "blockers", "completed", "batch", "continuation_settings")}
+        result["current"] = {k: note.get(k) for k in ("goal", "acceptance", "progress", "decisions", "preserve", "operations", "evidence", "next", "blockers", "completed", "batch", "continuation_settings")}
         result["continuation_review"] = continuation_review(note)
         if not detail:
             result["current"]["operations"] = [op for op in note["operations"] if op["state"] != "SUCCEEDED"]
