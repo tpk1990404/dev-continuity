@@ -13,8 +13,8 @@ import tempfile
 import time
 import uuid
 
-VERSION = 4
-SKILL_VERSION = "1.6.0"
+VERSION = 5
+SKILL_VERSION = "1.6.1"
 MAX_NOTE = 48 * 1024
 TAIL = 256 * 1024
 MAX_USAGE_SCAN = 8 * 1024 * 1024
@@ -102,7 +102,7 @@ def load(project, task, revision=None):
         raw = stream.read(MAX_NOTE * 2 + 1)
     require(len(raw) <= MAX_NOTE * 2 and digest(raw) == revision, "checkpoint hash mismatch; keep previous snapshots")
     value = json.loads(raw)
-    require(value["version"] in {1, 2, 3, VERSION} and value["project"] == str(root) and value["task"] == task, "checkpoint belongs to another project/task/version")
+    require(value["version"] in {1, 2, 3, 4, VERSION} and value["project"] == str(root) and value["task"] == task, "checkpoint belongs to another project/task/version")
     require(not current or not value.get("archive_only"), "archive snapshot cannot be the current checkpoint")
     return value, revision
 
@@ -241,9 +241,13 @@ def validate_note(note):
                 for k in ("id", "scope", "done_when")), "batch requires bounded id, scope and done_when")
     if "continuation_settings" in note:
         settings = note["continuation_settings"]
-        require(isinstance(settings, dict) and set(settings) <= {"model", "thinking", "source_record"}
+        require(isinstance(settings, dict) and set(settings) <= {"model", "thinking", "source_record", "for_session"}
                 and "source_record" in settings, "continuation settings require a user source")
         require(all(isinstance(v, str) and 0 < len(v) <= 160 for v in settings.values()), "invalid continuation setting")
+        if "thinking" in settings:
+            require(settings["thinking"] in {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}, "unknown reasoning effort")
+        if "for_session" in settings:
+            identifier(settings["for_session"])
         source = next((r for r in note.get("records", []) if r["id"] == settings.get("source_record") and is_current(r)), {})
         require(source.get("basis") == "user" and source.get("state") == "confirmed" and source.get("critical") is True,
                 "continuation settings need a current critical user source record")
@@ -362,6 +366,8 @@ def save(project, task, session, note, expected, patch=False, archive_superseded
         before_settings = previous.get("continuation_settings", {})
         after_settings = note.get("continuation_settings", {})
         require(isinstance(after_settings, dict), "continuation settings must be an object")
+        if after_settings != before_settings and "for_session" in after_settings:
+            require(after_settings["for_session"] == session, "settings override must bind to the current writer")
         if {k: v for k, v in before_settings.items() if k != "source_record"} != {k: v for k, v in after_settings.items() if k != "source_record"}:
             require(after_settings.get("source_record") and after_settings.get("source_record") != before_settings.get("source_record"),
                     "changed continuation settings require a new user source record")
@@ -515,7 +521,7 @@ def verify(project, task, history=False):
                 and decision["decision"]["decision"] == "migrate" and decision["decision"]["tools"] == "available"
                 and capacity_ready and len(encode(value["note"])) <= MAX_NOTE * 0.95,
             "capacity": capacity(value["note"]),
-            "continuation_settings": {k: v for k, v in value["note"].get("continuation_settings", {}).items() if k != "source_record"},
+            "continuation_settings": {k: v for k, v in value["note"].get("continuation_settings", {}).items() if k in {"model", "thinking"}},
             "batch": value["note"].get("batch"),
             "review_scope": "source coverage acknowledgement; compare status changes, duplicate statements and original intent"}
     if history:
@@ -568,21 +574,23 @@ def recall(project, task, query="", offset=0, limit=8, history=False, revision=N
     return result
 
 
-def resolve_settings(note, directory, session):
+def resolve_settings(note, directory, session, transcript=None):
     """Resolve once at prepare; never treat missing evidence as a default choice."""
     explicit = note.get("continuation_settings", {})
-    settings = {k: v for k, v in explicit.items() if k != "source_record"}
-    if "thinking" in settings or (explicit and not settings):
-        return settings, {"kind": "user", "source_record": explicit["source_record"]}
-    runtime_path = directory / ("runtime-" + session + ".json")
-    runtime = bounded_json(runtime_path) if runtime_path.exists() else {}
-    transcript = runtime.get("transcript", {}).get("path")
-    require(transcript, "cannot inherit thinking: current owner transcript unavailable; verify runtime or record a user choice")
+    override = explicit.get("for_session") == session
+    settings = {k: v for k, v in explicit.items() if k in {"model", "thinking"}} if override else {}
+    if override and (not settings or set(settings) == {"model", "thinking"}):
+        return settings, {"kind": "user", "source_record": explicit["source_record"], "for_session": session}
+    if not transcript:
+        runtime_path = directory / ("runtime-" + session + ".json")
+        runtime = bounded_json(runtime_path) if runtime_path.exists() else {}
+        transcript = runtime.get("transcript", {}).get("path")
+    require(transcript, "cannot inherit settings: current owner transcript unavailable; supply its verified path or repair runtime")
     try:
         with Path(transcript).open("rb") as stream:
             header = json.loads(stream.readline(64 * 1024))
             require(header.get("type") == "session_meta" and header.get("payload", {}).get("id") == session,
-                    "cannot inherit thinking: transcript session mismatch")
+                    "cannot inherit settings: transcript session mismatch")
             stream.seek(0, 2)
             start = max(0, stream.tell() - MAX_USAGE_SCAN)
             stream.seek(start)
@@ -594,17 +602,24 @@ def resolve_settings(note, directory, session):
             if event.get("type") != "turn_context":
                 continue
             effort = event.get("payload", {}).get("effort")
-            require(effort in {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
-                    "cannot inherit thinking: latest turn has unknown effort; do not reuse an older value")
-            settings["thinking"] = effort
-            return settings, {"kind": "runtime", "session": session, "timestamp": event.get("timestamp"),
-                              "path": str(Path(transcript).resolve()), "sha256": digest(line)}
+            model = event.get("payload", {}).get("model")
+            require("thinking" in settings or effort in {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
+                    "cannot inherit settings: latest turn has unknown effort; do not reuse an older value")
+            require("model" in settings or isinstance(model, str) and 0 < len(model) <= 160 and model.strip() == model,
+                    "cannot inherit settings: latest turn has unknown model; do not reuse an older value")
+            resolved = {"model": model, "thinking": effort, **settings}
+            source = {"kind": "runtime", "session": session, "timestamp": event.get("timestamp"),
+                      "path": str(Path(transcript).resolve()), "sha256": digest(line)}
+            if override:
+                source.update(kind="runtime_with_user_override", source_record=explicit["source_record"], for_session=session)
+            return resolved, source
     except (OSError, json.JSONDecodeError) as error:
-        raise ValueError("cannot inherit thinking: transcript unavailable or malformed; verify runtime or record a user choice") from error
-    raise ValueError("cannot inherit thinking: no turn_context within bounded scan; verify runtime or record a user choice")
+        raise ValueError("cannot inherit settings: transcript unavailable or malformed; verify the current owner's log") from error
+    raise ValueError("cannot inherit settings: no turn_context within bounded scan; verify the current owner's log")
 
 
-def transfer(project, task, session, expected, action, successor=None, cancel_receipt=None):
+def transfer(project, task, session, expected, action, successor=None, cancel_receipt=None, transcript=None):
+    require(transcript is None or action == "prepare", "transcript path is only used at prepare; keep frozen settings")
     root, directory = store(project, task)
     with lock(directory):
         value, revision = load(root, task)
@@ -626,7 +641,7 @@ def transfer(project, task, session, expected, action, successor=None, cancel_re
                         "consolidate current memory or record why remaining essential constraints require this capacity")
             require(check["new_handoff_ready"],
                     "review goal/progress/decisions/evidence/next and record a current migrate decision with available host tools")
-            settings, settings_source = resolve_settings(value["note"], directory, session)
+            settings, settings_source = resolve_settings(value["note"], directory, session, transcript)
             handoff = {"phase": "REQUESTED", "request_id": str(uuid.uuid4()), "from": session, "memory_policy": 3,
                        "continuation_settings": settings, "settings_source": settings_source}
             text = (f"继续已授权的同一开发目标：{value['note']['goal']}\n"
@@ -640,6 +655,7 @@ def transfer(project, task, session, expected, action, successor=None, cancel_re
                     f"当前有限批次：{json.dumps(value['note']['batch'], ensure_ascii=False)}\n")
             if settings:
                 text += f"create_thread 接续设置：{json.dumps(settings, ensure_ascii=False)}；创建时显式传递；接棒核对实际首轮设置，不符则先修正，不接受写入权。\n"
+                text += "这是同一已授权任务的继续，沿用冻结设置，不重复新任务模型预检或自行套用建议强度；先只读核验实际模型/强度，匹配后接棒，目标或风险实质变化再按项目约定调整。\n"
             atomic(directory / "handoff-prompt.md", text.encode("utf-8"))
         elif action == "target":
             require(phase == "REQUESTED", "target already recorded or creation not reserved")
@@ -669,7 +685,7 @@ def transfer(project, task, session, expected, action, successor=None, cancel_re
         value["updated"] = now()
         revision = publish(directory, value)
     return {"revision": revision, "handoff": handoff,
-            "continuation_settings": handoff.get("continuation_settings", {k: v for k, v in value["note"].get("continuation_settings", {}).items() if k != "source_record"})}
+            "continuation_settings": handoff.get("continuation_settings", {k: v for k, v in value["note"].get("continuation_settings", {}).items() if k in {"model", "thinking"}})}
 
 
 def make_anchor(path, offset, length):
@@ -871,7 +887,7 @@ def hook(payload):
                 message = "开发连续性：用量未知（" + sample["reason"] + "），不等于余量充足；下一安全节点核对当前日志及接续能力。"
             runtime["unknown_reason"] = sample.get("reason") if sample["status"] == "unknown" else None
         if event in {"SessionStart", "PostToolUse"} and runtime.get("guidance_version") != SKILL_VERSION:
-            message = f"开发连续性已升级{SKILL_VERSION}；下一安全节点重读本机SKILL.md，核对过期状态及迁移决定。" + (message or "")
+            message = f"开发连续性已升级{SKILL_VERSION}；下一安全节点重读本机SKILL.md；接续默认继承当前实际模型/强度，不传旧固定设置。" + (message or "")
             runtime["guidance_version"] = SKILL_VERSION
         atomic(runtime_path, encode(runtime))
         if event in {"PreCompact", "Interrupt", "Stop", "SessionEnd"}:
@@ -915,6 +931,7 @@ def main():
             child.add_argument("--action", choices=("prepare", "target", "release", "accept", "cancel"), required=True)
             child.add_argument("--successor")
             child.add_argument("--cancel-receipt")
+            child.add_argument("--transcript", help="prepare only: verified current owner log when runtime path is unavailable")
     child = commands.add_parser("anchor")
     child.add_argument("--path", required=True)
     child.add_argument("--offset", type=int, required=True)
@@ -954,7 +971,7 @@ def main():
         elif args.command == "verify":
             result = verify(args.project, args.task, args.history)
         elif args.command == "transfer":
-            result = transfer(args.project, args.task, args.session, args.expected, args.action, args.successor, args.cancel_receipt)
+            result = transfer(args.project, args.task, args.session, args.expected, args.action, args.successor, args.cancel_receipt, args.transcript)
         elif args.command == "anchor":
             result = make_anchor(args.path, args.offset, args.length)
         elif args.command == "source":

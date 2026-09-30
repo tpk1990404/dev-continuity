@@ -28,11 +28,11 @@ class ContinuityTest(unittest.TestCase):
         self.note["records"] = [self.record("boundary", "Preserve dirty work; no repeated paid calls.")]
         self.runtime("old")
 
-    def runtime(self, session, effort="high"):
+    def runtime(self, session, effort="high", model="example-model"):
         transcript = self.root / (session + ".jsonl")
         transcript.write_text(json.dumps({"type": "session_meta", "payload": {"id": session}}) + "\n" +
                               json.dumps({"type": "turn_context", "timestamp": c.now(),
-                                          "payload": {"effort": effort, "model": "example-model"}}) + "\n", encoding="utf8")
+                                          "payload": {"effort": effort, "model": model}}) + "\n", encoding="utf8")
         _, directory = c.store(self.root, "task")
         c.atomic(directory / ("runtime-" + session + ".json"), c.encode({"transcript": {"path": str(transcript)}}))
         return transcript
@@ -40,39 +40,92 @@ class ContinuityTest(unittest.TestCase):
     def test_runtime_thinking_inherited_and_frozen_across_transfer(self):
         transcript = self.runtime("old", "xhigh")
         with transcript.open("a", encoding="utf8") as stream:
-            stream.write(json.dumps({"type": "turn_context", "timestamp": c.now(), "payload": {"effort": "high"}}) + "\n")
+            stream.write(json.dumps({"type": "turn_context", "timestamp": c.now(), "payload": {"model": "latest-model", "effort": "high"}}) + "\n")
         revision = self.saved()
         result = c.transfer(self.root, "task", "old", revision, "prepare")
-        self.assertEqual(result["continuation_settings"], {"thinking": "high"})
+        self.assertEqual(result["continuation_settings"], {"model": "latest-model", "thinking": "high"})
         self.assertEqual(result["handoff"]["settings_source"]["session"], "old")
         self.runtime("old", "low")  # Creation and later phases must use the same frozen request.
         for action in ("target", "release", "accept"):
             result = c.transfer(self.root, "task", "new" if action == "accept" else "old",
                                 result["revision"], action, successor="new")
-            self.assertEqual(result["continuation_settings"], {"thinking": "high"})
+            self.assertEqual(result["continuation_settings"], {"model": "latest-model", "thinking": "high"})
 
     def test_runtime_settings_missing_mismatched_or_unknown_do_not_reserve(self):
         revision = self.saved()
-        for mode in ("missing", "wrong-session", "unknown", "scan-limit"):
+        for mode in ("missing", "wrong-session", "unknown", "missing-model", "scan-limit"):
             with self.subTest(mode=mode):
-                transcript = self.runtime("old", "unsupported" if mode == "unknown" else "high")
+                transcript = self.runtime("old", "unsupported" if mode == "unknown" else "high", None if mode == "missing-model" else "example-model")
                 if mode == "missing":
                     transcript.unlink()
                 elif mode == "wrong-session":
                     transcript.write_text(transcript.read_text(encoding="utf8").replace('"old"', '"another"'), encoding="utf8")
+                elif mode == "missing-model":
+                    transcript = self.runtime("old")
+                    with transcript.open("a", encoding="utf8") as stream:
+                        stream.write(json.dumps({"type": "turn_context", "payload": {"effort": "xhigh"}}) + "\n")
                 elif mode == "scan-limit":
                     with transcript.open("ab") as stream:
                         stream.write(b' ' * (c.MAX_USAGE_SCAN + 1))
-                with self.assertRaisesRegex(ValueError, "cannot inherit thinking"):
+                with self.assertRaisesRegex(ValueError, "cannot inherit settings"):
                     c.transfer(self.root, "task", "old", revision, "prepare")
                 self.assertEqual(c.load(self.root, "task")[1], revision)
 
     def test_explicit_choice_and_default_reset_override_runtime(self):
         _, directory = c.store(self.root, "task")
-        for explicit, expected in (({"thinking": "medium"}, {"thinking": "medium"}), ({}, {}),
+        for explicit, expected in (({"thinking": "medium"}, {"model": "example-model", "thinking": "medium"}), ({}, {}),
                                    ({"model": "user-selected"}, {"model": "user-selected", "thinking": "high"})):
-            result, _ = c.resolve_settings({"continuation_settings": {**explicit, "source_record": "user-choice"}}, directory, "old")
+            result, _ = c.resolve_settings({"continuation_settings": {**explicit, "source_record": "user-choice", "for_session": "old"}}, directory, "old")
             self.assertEqual(result, expected)
+
+    def test_legacy_high_does_not_override_latest_model_or_effort(self):
+        _, directory = c.store(self.root, "task")
+        note = {"continuation_settings": {"thinking": "high", "model": "obsolete-model", "source_record": "old-choice"}}
+        for effort in ("low", "medium", "high", "xhigh", "max", "ultra"):
+            with self.subTest(effort=effort):
+                self.runtime("old", effort, "current-model")
+                result, source = c.resolve_settings(note, directory, "old")
+                self.assertEqual(result, {"model": "current-model", "thinking": effort})
+                self.assertEqual(source["kind"], "runtime")
+
+    def test_session_override_does_not_pin_successor_or_rebind_old_choice(self):
+        self.note['records'].append(self.record('settings', 'Use medium for this continuation.', kind='requirement'))
+        self.note['continuation_settings'] = {'thinking': 'medium', 'source_record': 'settings', 'for_session': 'old'}
+        revision = self.saved()
+        for action in ('prepare', 'target', 'release', 'accept'):
+            result = c.transfer(self.root, 'task', 'new' if action == 'accept' else 'old', revision, action, successor='new')
+            revision = result['revision']
+            self.assertEqual(result['continuation_settings'], {'model': 'example-model', 'thinking': 'medium'})
+        changed = self.record('new-settings', 'Use low for this continuation.', kind='requirement')
+        with self.assertRaisesRegex(ValueError, 'current writer'):
+            c.save(self.root, 'task', 'new', {'records': [changed], 'continuation_settings': {
+                'thinking': 'low', 'source_record': 'new-settings', 'for_session': 'old'}}, revision, patch=True)
+        self.runtime('new', 'xhigh', 'changed-model')
+        revision = c.save(self.root, 'task', 'new', self.note, revision)['revision']
+        revision = self.review('new', revision)
+        result = c.transfer(self.root, 'task', 'new', revision, 'prepare')
+        self.assertEqual(result['continuation_settings'], {'model': 'changed-model', 'thinking': 'xhigh'})
+        value, _ = c.load(self.root, 'task')
+        self.assertEqual(value['note']['continuation_settings']['for_session'], 'old')
+
+    def test_prepare_explicit_transcript_checks_identity_without_runtime_writes(self):
+        transcript = self.runtime('old', 'xhigh', 'current-model')
+        _, directory = c.store(self.root, 'task')
+        runtime = directory / 'runtime-old.json'
+        revision = self.saved()
+        runtime.unlink()
+        wrong = self.runtime('other', 'low', 'another-model')
+        with self.assertRaisesRegex(ValueError, 'session mismatch'):
+            c.transfer(self.root, 'task', 'old', revision, 'prepare', transcript=wrong)
+        self.assertEqual(c.load(self.root, 'task')[1], revision)
+        run = subprocess.run([sys.executable, str(Path(c.__file__)), 'transfer', '--project', str(self.root),
+            '--task', 'task', '--session', 'old', '--expected', revision, '--action', 'prepare',
+            '--transcript', str(transcript)], capture_output=True, check=True)
+        result = json.loads(run.stdout)
+        self.assertEqual(result['continuation_settings'], {'model': 'current-model', 'thinking': 'xhigh'})
+        self.assertFalse(runtime.exists())
+        with self.assertRaisesRegex(ValueError, 'only used at prepare'):
+            c.transfer(self.root, 'task', 'old', result['revision'], 'target', successor='new', transcript=transcript)
 
     def record(self, key, text, **kwargs):
         source = self.root / "request.txt"
@@ -484,11 +537,12 @@ class ContinuityTest(unittest.TestCase):
         self.note['continuation_settings'] = {'thinking': 'high', 'source_record': 'settings'}
         revision = self.saved()
         result = c.transfer(self.root, 'task', 'old', revision, 'prepare')
-        self.assertEqual(result['continuation_settings'], {'thinking': 'high'})
+        self.assertEqual(result['continuation_settings'], {'model': 'example-model', 'thinking': 'high'})
         prompt = (self.root/'.dev-continuity/task/handoff-prompt.md').read_text(encoding='utf-8')
         self.assertIn('fix-one', prompt)
         self.assertIn('"thinking": "high"', prompt)
-        self.assertNotIn('"model":', prompt)
+        self.assertIn('"model": "example-model"', prompt)
+        self.assertIn('不重复新任务模型预检', prompt)
         # New reservations require a finite batch even when old-format memory can be read.
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()
@@ -692,9 +746,28 @@ class ContinuityTest(unittest.TestCase):
         for action in ['target','release','accept']:
             revision=c.transfer(self.root,'task','new' if action=='accept' else 'old',revision,action,successor='new')['revision']
         value,_=c.load(self.root,'task')
-        self.assertEqual(value['version'],4)
+        self.assertEqual(value['version'],c.VERSION)
         self.assertEqual(value['owner'],'new')
         self.assertEqual(value['handoff']['phase'],'ACCEPTED')
+
+    def test_schema4_pending_settings_are_not_recomputed(self):
+        self.saved()
+        base, _ = c.load(self.root, 'task')
+        _, directory = c.store(self.root, 'task')
+        for frozen in ({'thinking': 'low'}, {}, None):
+            with self.subTest(frozen=frozen):
+                value = deepcopy(base)
+                value['version'] = 4
+                value['handoff'] = {'phase': 'REQUESTED', 'request_id': 'legacy', 'from': 'old', 'memory_policy': 3}
+                if frozen is not None:
+                    value['handoff'].update(continuation_settings=frozen, settings_source={'kind': 'legacy'})
+                revision = c.publish(directory, value)
+                for action in ('target', 'release', 'accept'):
+                    result = c.transfer(self.root, 'task', 'new' if action == 'accept' else 'old', revision, action, successor='new')
+                    revision = result['revision']
+                    self.assertEqual(result['continuation_settings'], frozen or {})
+                    if frozen is not None:
+                        self.assertEqual(result['handoff']['settings_source'], {'kind': 'legacy'})
 
     def test_compaction_invalidates_deferral_and_capacity_exception_has_ceiling(self):
         revision=self.saved()

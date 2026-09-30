@@ -27,7 +27,9 @@
 
 新任务增加 records；格式、纠正、来源与复核见 [记忆格式](memory.md)。旧JSON仍能读取/保存，新 prepare 要求 batch 和当前迁移复核。batch 范围从已有授权与计划取，不以“找更多问题”代替完成条件；next只推进本批缺口，批次完成再登记下一已授权批次。恢复前核对目标/停止指示，不重复展开已有同版本验证。首次登记使用真实项目目录；Hook不能从父目录发现隔离子目录中的登记。
 
-用户明确选择模型/推理强度时，登记 continuation_settings，例如 {"thinking":"high","source_record":"真实用户要求记录ID"}；model仅在明确选择时加入。source_record须为当前已确认、critical且basis=user的有原文记录，不能用推测或助手建议代替用户选择；变更选择须换用新的用户依据。明确恢复默认时写 {"source_record":"新的恢复默认要求ID"}。首次未明确时省略整个字段；之后完整save省略batch/settings也会沿用旧值，不能借遗漏清除约定。recall首屏展示这两个字段。
+默认无需登记固定模型/强度：prepare 读取当前 owner 的最新实际 model/effort。确需在下一接续主动调整、且有授权依据时，登记 continuation_settings，例如 {"thinking":"medium","source_record":"本次调整要求ID","for_session":"当前owner的真实ID"}；只改一项时另一项继承实际设置。source_record须为当前已确认、critical且basis=user的有原文记录，不能以助手建议代替授权；变更设置或重新绑定 owner 必须使用新的用户依据。明确恢复默认写 {"source_record":"新的恢复默认要求ID","for_session":"当前owner的真实ID"}，本次返回空设置。
+
+for_session 绑定来源 owner 的接续选择，取消预约后同 owner 可重试；接棒后原绑定失效。旧记录缺少 for_session 时仅保留历史，不覆盖当前实际设置。完整save省略batch/settings仍保留旧内容，不自动重新绑定；recall所示保存值不是最终创建参数。沿用模型须有符合宿主要求的用户授权，本人明确要求“新对话沿用之前模型和强度”可作为依据；无此授权不能用代理建议指定模型。
 
 ```text
 py -3 -X utf8 SCRIPT save --project PROJECT --task TASK --session SESSION --input INPUT.json --expected new
@@ -63,7 +65,7 @@ cost仅在审计/批次结束时按需运行，流式读取指定一个本地tra
 只有用户明确要求或有效的个人约定已授权自动接续同一目标时创建任务；无此授权交付 prompt 文件即可。Skill 自身不提供创建任务或外部操作的授权；项目与工具的更高优先级边界继续适用。
 
 1. 完成当前安全步骤，实际核对创建、投递及等待工具和既有授权；按记忆格式保存五字段复核与migrate决定，verify 确认 new_handoff_ready=true。`transfer --action prepare` 生成 `handoff-prompt.md` 及唯一预约。重复 prepare 拒绝。新 prepare 要求有限batch、有效关键来源、容量余量及与当前正文匹配的memory_review；ok=true或旧handoff_ready=true单独不足。未知操作须在语义核验时确认已停止写入、结果如何查询；不以迁移触发重放。
-2. 用已有 create_thread：先 list_projects，遵守worktree/local规则与指定目录。逐项传递prepare返回的continuation_settings，不能用note中的字段替代冻结结果。用户选择优先；未指定thinking时从当前owner的runtime.transcript.path读取最近turn_context.effort，检查session_meta身份，最多读取尾部8 MiB。缺文件、身份不符、格式未知或超界未找到均在预约前失败，保留旧owner继续；核实当前日志或登记有原文依据的用户选择后再prepare。只有明确恢复默认（仅含source_record）才返回空设置；model仍仅在用户明确选择时传递，不修改全局默认。handoff保留设置及来源，target/release/accept返回相同冻结值；旧预约按原流程完成，不补造旧设置。提示词只携带短入口、request_id、批次及来源，要求先只读核对；未释放则READY并等旧任务消息。不fork整段旧聊天；接棒前通过宿主信息或新任务实际turn_context核对设置，不符先修正再accept，工具不支持时说明，不能悄悄升档。脚本不操作宿主设置，也不能代替此实际核对。
+2. 用已有 create_thread：先 list_projects，遵守worktree/local规则与指定目录及设置继承授权。逐项传递prepare返回的continuation_settings，不能直接传note里的历史字段。默认从当前owner的runtime.transcript.path读取最近同一条turn_context.model/effort，检查session_meta身份，最多读取尾部8 MiB；路径未登记时 prepare 可加 --transcript REAL_LOG，不写runtime、不猜其他对话日志。缺文件、身份不符、最新字段未知或超界未找到均在预约前失败，不回退旧值。仅 for_session 对应当前owner的调整生效：部分调整继承另一项，完整指定或明确恢复默认可用用户依据；不支持的模型/强度交由宿主验证，不自动替换。handoff保留设置及来源，target/release/accept返回同一冻结值；旧预约按原设置完成，不重算；后续阶段不接受--transcript。提示词携带短入口、request_id、批次及来源，要求先只读核对；未释放则READY并等旧任务消息。不fork整段聊天；接棒前通过宿主信息或新任务实际turn_context核对模型与强度，不符先修正再accept。脚本不操作宿主设置，也不能代替实际核对。
 3. 调用返回真实 threadId 后 `transfer --action target --successor ID`。只有 clientThreadId 时等待解析；回执不明先查创建结果，禁止再次 create。失败记录保留，不自动清除预约。
 4. 确认旧任务代码/外部操作已停且现场仍匹配，`transfer --action release`；之后旧任务仅查询回执和发送交接消息，不再写本任务文件。用 `send_message_to_thread` 将 `request_id`、真实 successor ID、RELEASED revision 和无在途写入的说明发给刚创建的任务，明确“核验后 accept，立即继续，不等待用户回复”。消息失败先查投递/运行结果，不自动重复释放或创建。
 5. 新任务核对原目标、权限、文件和原文，确认旧 writer 已释放及无冲突，再 `transfer --action accept --session SUCCESSOR`，核对持久化 owner、request_id、phase=ACCEPTED 后直接完成 next。接棒失败保留证据，不写业务文件。旧任务仍在等待回执不等于仍拥有写入权；不能要求旧任务先结束、同时让旧任务等新任务结束而造成互相等待。工具只防止检查点并发，不代替实际在途操作及项目已有 writer/routing 核验。

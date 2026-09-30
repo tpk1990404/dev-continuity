@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.6.1 — 2026-09-30
+
+### Fix setting inheritance
+
+- Historical `continuation_settings.thinking` no longer permanently overrides the current conversation. Preparation inherits `model` and `effort` from the same latest verified owner `turn_context`, preserving manual changes instead of pinning all successors to an earlier `high` choice.
+- Intentional user-evidenced adjustments require `for_session` matching the source owner. Partial adjustments inherit the other setting; a full explicit choice or explicit default reset remains supported. The binding expires with ownership transfer, while cancelled reservations can be retried by the same owner. Rebinding or changing choices requires new user evidence; a full save never silently reactivates a historical choice.
+- `transfer --action prepare --transcript PATH` supports verified owner logs when hooks did not register their path. Identity and bounded-scan checks still apply. It never writes runtime state, guesses a model, combines fields from different turns, or falls back to an older setting when the latest required field is unavailable.
+- Only `model/thinking` are returned as creation settings; source metadata is retained in the receipt. Target/release/accept return the frozen choice, including existing legacy reservations. The host must validate supported settings and check the successor's actual model and effort before accepting ownership.
+
+### Validation and upgrade
+
+- Regression coverage includes stale fixed `high`, changing models/efforts, partial adjustments, owner binding, explicit default reset, frozen reservations, missing latest fields, transcript identity and scan bounds, plus completing schema-4 reservations without recalculating their settings.
+- Reads schema 1–5; new saves and transfer writes use schema 5 so older scripts reject the new inheritance semantics. Policy 3 remains unchanged. Installation requires no bulk checkpoint migration and does not rewrite project state. After schema-5 writes, resume with a compatible version; do not roll back task pointers.
+- One safe-boundary hook hint asks active owners to reload the inheritance rule. No extra model calls, dependencies or polling were introduced; model and effort are read in the same existing bounded scan. Tests do not establish that every host honors creation settings, and no net token-savings claim is made.
+
 ## 1.6.0 — 2026-09-29
 
 ### Memory completeness before cost reduction

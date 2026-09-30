@@ -2,7 +2,7 @@
 name: dev-continuity
 description: Maintain resumable development checkpoints, trace decisions to source records, and transfer unfinished work across conversations. Use for long development tasks, context pressure, interruption recovery, or handoff; skip routine one-step edits and unrelated questions.
 metadata:
-  version: "1.6.0"
+  version: "1.6.1"
 ---
 
 # 开发连续性
@@ -45,7 +45,7 @@ Codex 本地记忆只辅助查稳定偏好、经验和历史入口；项目记�
 
 用 usage --project/--task/--session 跟随当前日志；unknown 不是余量充足，不猜比例。压缩先发生则恢复继续，到安全节点再判断。复核后预约一次 → 记录真实新任务 → 释放旧写入权 → 接棒执行 next；结果不明先查，不重复创建或并发写入。百分比不单独授权创建，目标完成或无独立下一步时不空转。
 
-continuation_settings 登记有用户依据的选择；未指定 thinking 时，prepare 从当前 owner 最近实际 turn_context 继承强度，冻结于交接回执。创建必须传递 prepare 返回的设置，接棒前核对首轮实际值，不符先修正；缺少可核验依据则保留原任务继续，不静默恢复默认。model 仍仅在用户明确指定时传递；明确恢复默认按操作参考登记，不改全局默认。新任务取得实质进展前不再迁移。
+接续默认沿用当前 owner 最近同一条实际 turn_context.model/effort，冻结于 prepare 回执；旧 continuation_settings 不能固定所有后续对话。有依据且在授权内的调整用新用户来源与 for_session=当前 owner 登记，只作用于该 owner 的接续；单改一项时另一项仍继承。创建传递 prepare 返回值，核对首轮模型和强度，不符先修正再接棒；日志路径缺失可在 prepare 用 --transcript 指向身份核验过的真实日志，设置未知则保持原任务继续，不猜默认。继承授权须符合宿主工具要求；不能自动替换不支持的模型/强度。明确恢复默认见操作参考。新任务取得实质进展前不再迁移。
 
 Hooks 只低频记录机器状态和短提示，不生成语义摘要、增加模型调用、定时轮询或强制Stop续跑，不承诺应用退出后继续。能力缺失时保留短交接正文；不伪造接棒完成。
 

@@ -8,7 +8,13 @@ dev-continuity is an independent community skill for long development tasks, int
 
 This is not an OpenAI product, infinite memory, a background agent, or a promise of uninterrupted execution.
 
-## What's new in 1.6.0
+## What's new in 1.6.1
+
+- Inherit the current owner's latest actual model and reasoning effort together. Historical `high` choices no longer permanently override later manual changes.
+- Intentional, user-evidenced adjustments use `for_session` to bind the source owner; they stop applying after ownership transfers. Creation uses settings frozen at reservation, not historical note values.
+- Preparation can accept a verified `--transcript` path when runtime lacks one. Unknown identity/settings block reservation rather than using defaults. Reads schemas 1–5, writes schema 5, and preserves existing frozen reservations. See [upgrade details](CHANGELOG.md#161--2026-09-30).
+
+### What's new in 1.6.0
 
 - Recover the complete authorized goal using the project's existing requirements table. Batches reference its entries; batch completion does not establish goal completion. Reconcile scope at relevant changes, batch boundaries and before claiming completion.
 - The first unfiltered recovery page now includes `decisions/evidence`, preserving tradeoffs and verification boundaries. Later pages do not repeat them. Existing fields, schema 4 and policy 3 remain compatible.
@@ -35,7 +41,7 @@ This is not an OpenAI product, infinite memory, a background agent, or a promise
 - Archives completed evidence while preserving original records and operation receipts.
 - Retains optional, reviewed source slices up to 16 KiB and verifies them by SHA-256.
 - Transfers ownership through `REQUESTED → TARGET_RECORDED → RELEASED → ACCEPTED`.
-- Carries explicit user choices, otherwise inherits verified current reasoning effort; model overrides require explicit user evidence.
+- Within authorized setting inheritance, preserves the latest actual model and reasoning effort; intentional changes require user evidence and a source-owner binding.
 - Distinguishes current-state validity, historical source availability, and actual business acceptance.
 
 The checkpoint lock does not lock all application files. New Codex tasks require host tools and user authorization; the Python script cannot create conversations on its own.
@@ -115,8 +121,8 @@ python3 install.py restore --file /path/to/receipt.json
 
 CI targets Windows/Ubuntu and Python 3.11/3.14. It does not prove every Codex host's hook or task-creation integration. macOS is not included in this CI matrix.
 
-Restore refuses to overwrite files changed after installation. Supply the original `--home`/`--skill-dir` options when applicable. Version 1.5 reads schemas 1/2/3/4; new saves and transfer writes use schema 4. Installation does not rewrite task data. Existing policy 1/2 reservations retain their checks; new reservations use policy 3 and `new_handoff_ready`, including the explicit decision and cross-field acknowledgement. This acknowledgement is not automated proof of semantic correctness.
+Restore refuses to overwrite files changed after installation. Supply the original `--home`/`--skill-dir` options when applicable. Version 1.6.1 reads schemas 1–5; new saves and transfer writes use schema 5. Installation does not rewrite task data. Existing policy 1/2/3 reservations retain their frozen settings and checks; new reservations use policy 3 and `new_handoff_ready`, including the explicit decision and cross-field acknowledgement. This acknowledgement is not automated proof of semantic correctness.
 
-After schema 4 writes, do not resume the task with 1.4 or roll back its state pointer. Restore a compatible skill and preserve all subsequent progress. Restoring skill files does not authorize task-state rollback or replay.
+After schema 5 writes, resume with a compatible version and preserve all subsequent progress. Restoring skill files does not authorize task-state rollback or replay.
 
 Use [Issues](https://github.com/tpk1990404/dev-continuity/issues) for reproducible bugs and proposals, and private security reporting for sensitive findings. Licensed under the [MIT License](LICENSE).
