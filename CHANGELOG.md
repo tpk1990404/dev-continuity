@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.7.0 — 2026-09-30
+
+### Recoverable memory and selective reading
+
+- Fixed `recall --history --query` searching only the current note. It now searches the reachable archive chain at the selected revision, deduplicates stable record IDs with the current entry taking precedence, and marks historical rows and their source revision. Historical rows do not count as unread current requirements or grant execution permission.
+- Current-ID lookup now lazily visits archives only after a current miss. A damaged unrelated archive no longer prevents reading a verified current record; an unresolved miss still fails on damaged history rather than reporting absence as permission.
+- `record --id ID --source-index N` optionally reads one reviewed original slice using existing hash/source-retention checks, limited to 16 KiB. Default record and recovery views do not expand source bodies. Obvious-secret checks do not replace human redaction.
+
+### Enforce actual setting checks before acceptance
+
+- New policy-4 reservations compare the successor's latest verified model/effort with the frozen request before binding ownership. A mismatch, missing log or unknown setting leaves the same reservation RELEASED and the successor read-only. Correct host settings, obtain real evidence and retry; never create another successor to bypass the check.
+- `--transcript` now supports prepare and accept when runtime does not hold the real session log. Identity and bounded-read checks apply; the script does not alter host settings. Successful comparison retains its actual source. Explicit default reset is recorded as requested defaults, not falsely claimed as matched settings.
+- Unknown runtime/header/turn payload shapes produce controlled failures with no state publication, instead of uncaught attribute errors. No fallback to an older model or effort is introduced.
+
+### Validation and upgrade
+
+- Regression coverage includes archive search after retirement, selective current lookup, retained original-source reading, setting mismatch/identity/missing-log failures before writer transfer, explicit defaults, malformed objects, and old reservations finishing under their original policy.
+- Reads schemas 1–6; new saves and transfers write schema 6. New reservations use policy 4; existing policy 1/2/3 reservations retain frozen values and checks. Installation does not migrate or rewrite project checkpoints. After schema-6 writes, resume with a compatible version and preserve progress rather than rolling back pointers.
+- Default recovery content remains unchanged; source expansion and history search are opt-in. Setting verification adds one bounded local log read at acceptance, with no new model call, dependency or polling. File bytes, archive-read counts and scripted tests are not net token savings or proof of long-term semantic recall.
+
 ## 1.6.1 — 2026-09-30
 
 ### Fix setting inheritance

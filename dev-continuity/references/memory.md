@@ -46,10 +46,15 @@ sources 必须换成真实 anchor；这是格式示例，不是可直接确认�
 py -3 -X utf8 SCRIPT recall --project PROJECT --task TASK
 py -3 -X utf8 SCRIPT recall --project PROJECT --task TASK --revision REV --offset NEXT_OFFSET
 py -3 -X utf8 SCRIPT record --project PROJECT --task TASK --id RECORD_ID
+py -3 -X utf8 SCRIPT record --project PROJECT --task TASK --id RECORD_ID --source-index 0
 py -3 -X utf8 SCRIPT operation --project PROJECT --task TASK --id OPERATION_ID
 ```
 
 CLI recall 默认短视图，省略完整 anchors/依赖哈希及已完成操作。record / operation 按 ID 查当前和归档，返回历史标记与 revision；找不到或读取失败不能当作“允许再做”。recall --detail 保留 1.2 完整输出；Python recall 默认 detail=True，兼容既有调用。
+
+1.7 的 recall --history --query 搜索固定 revision 可达的当前与归档记录，按 ID 去重、当前优先；历史行带 historical/record_revision，不算入当前必读欠项，也不授予执行权限。默认恢复不扫描归档正文。按 ID 查询先命中当前，未命中才读归档；历史损坏不能解释为没有记录。
+
+record 默认只返回记录及原文位置；加 --source-index N 可读取第 N 个已确认非敏感片段（从0起），最多16KiB并校验原哈希，可回读保留原文。一次只取一个片段；不自动展开所有来源或整段聊天。明显秘密检查不替代人工脱敏，历史原文可读不证明当前结论有效。
 
 1.6 首个无 query 页面同时返回 decisions/evidence，避免只恢复进度却遗漏取舍与验证边界；后续页不重复这部分。字段保持短结论和引用，长详情用 record/原文按需查。不要每轮 show 全文、每次都扫描历史或重新读同一 Skill；revision、相关依赖或实际问题变化才补读。项目明确要求完整阅读的文件仍须遵守。
 
@@ -104,4 +109,4 @@ source --project PROJECT --input ANCHOR.json --retain 可显式保存某段。�
 
 verify --history 按需审计历史原文，单独返回 history.ok，历史失配也返回非零退出码；当前 ok 与历史原文完整性不能混称。普通 verify 不重复扫描历史原文内容。
 
-1.6.1读取schema 1/2/3/4/5，保存和交接写schema 5，避免旧脚本继续按“历史设置永久优先”解释新记录。for_session 仅为有依据的本次设置调整绑定来源owner，设置输出不包含该元数据。已有memory_policy 1/2/3预约保留其冻结值与原检查；安装不改项目检查点，无需批量迁移。写过schema 5的任务须用兼容版本继续；安装文件回滚不等于任务数据回滚，不能回退指针掩盖进展或已执行操作。
+1.7读取schema 1–6，新保存和交接写schema6，新预约policy4要求accept核验实际设置，避免旧脚本忽略门禁。for_session绑定来源owner，创建参数不含元数据。旧policy1/2/3预约保留冻结值与原检查，安装不改项目检查点，无需批量迁移。写过schema6的任务须用兼容版本继续；安装回滚不等于数据回滚，不能回退指针掩盖进展或已执行操作。

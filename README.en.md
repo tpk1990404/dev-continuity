@@ -8,7 +8,14 @@ dev-continuity is an independent community skill for long development tasks, int
 
 This is not an OpenAI product, infinite memory, a background agent, or a promise of uninterrupted execution.
 
-## What's new in 1.6.1
+## What's new in 1.7.0
+
+- Historical keyword queries now search reachable archives, deduplicate record IDs, and mark historical provenance. Archiving a decision no longer makes it invisible to keyword recovery.
+- Current-ID lookup does not eagerly read unrelated archives. `record --id ID --source-index N` optionally reads one hash-verified, reviewed source slice; default recovery output remains unchanged.
+- New reservations verify the successor's actual model and effort before accepting ownership. Unknown/mismatched settings preserve read-only status; correct the host settings and retry the same reservation. Malformed log objects return controlled failures.
+- Reads schemas 1–6, writes schema 6, and creates policy-4 reservations. Existing reservations retain their original checks. See [upgrade details](CHANGELOG.md#170--2026-09-30).
+
+### What's new in 1.6.1
 
 - Inherit the current owner's latest actual model and reasoning effort together. Historical `high` choices no longer permanently override later manual changes.
 - Intentional, user-evidenced adjustments use `for_session` to bind the source owner; they stop applying after ownership transfers. Creation uses settings frozen at reservation, not historical note values.
@@ -121,8 +128,8 @@ python3 install.py restore --file /path/to/receipt.json
 
 CI targets Windows/Ubuntu and Python 3.11/3.14. It does not prove every Codex host's hook or task-creation integration. macOS is not included in this CI matrix.
 
-Restore refuses to overwrite files changed after installation. Supply the original `--home`/`--skill-dir` options when applicable. Version 1.6.1 reads schemas 1–5; new saves and transfer writes use schema 5. Installation does not rewrite task data. Existing policy 1/2/3 reservations retain their frozen settings and checks; new reservations use policy 3 and `new_handoff_ready`, including the explicit decision and cross-field acknowledgement. This acknowledgement is not automated proof of semantic correctness.
+Restore refuses to overwrite files changed after installation. Supply the original `--home`/`--skill-dir` options when applicable. Version 1.7 reads schemas 1–6 and writes schema 6. Installation does not rewrite task data. Existing policy 1/2/3 reservations retain their settings and checks; new policy-4 reservations also verify actual successor settings before acceptance. `new_handoff_ready` still requires a migration decision and cross-field acknowledgement, which is not automated proof of semantic correctness.
 
-After schema 5 writes, resume with a compatible version and preserve all subsequent progress. Restoring skill files does not authorize task-state rollback or replay.
+After schema 6 writes, resume with a compatible version and preserve all subsequent progress. Restoring skill files does not authorize task-state rollback or replay.
 
 Use [Issues](https://github.com/tpk1990404/dev-continuity/issues) for reproducible bugs and proposals, and private security reporting for sensitive findings. Licensed under the [MIT License](LICENSE).

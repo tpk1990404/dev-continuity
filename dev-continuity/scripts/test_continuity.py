@@ -27,6 +27,7 @@ class ContinuityTest(unittest.TestCase):
         (self.root / "request.txt").write_bytes(b"Preserve dirty work. Never repeat a paid operation.\n")
         self.note["records"] = [self.record("boundary", "Preserve dirty work; no repeated paid calls.")]
         self.runtime("old")
+        self.runtime("new")
 
     def runtime(self, session, effort="high", model="example-model"):
         transcript = self.root / (session + ".jsonl")
@@ -46,6 +47,7 @@ class ContinuityTest(unittest.TestCase):
         self.assertEqual(result["continuation_settings"], {"model": "latest-model", "thinking": "high"})
         self.assertEqual(result["handoff"]["settings_source"]["session"], "old")
         self.runtime("old", "low")  # Creation and later phases must use the same frozen request.
+        self.runtime("new", "high", "latest-model")
         for action in ("target", "release", "accept"):
             result = c.transfer(self.root, "task", "new" if action == "accept" else "old",
                                 result["revision"], action, successor="new")
@@ -53,7 +55,7 @@ class ContinuityTest(unittest.TestCase):
 
     def test_runtime_settings_missing_mismatched_or_unknown_do_not_reserve(self):
         revision = self.saved()
-        for mode in ("missing", "wrong-session", "unknown", "missing-model", "scan-limit"):
+        for mode in ("missing", "wrong-session", "unknown", "missing-model", "runtime-null", "header-null", "turn-list", "scan-limit"):
             with self.subTest(mode=mode):
                 transcript = self.runtime("old", "unsupported" if mode == "unknown" else "high", None if mode == "missing-model" else "example-model")
                 if mode == "missing":
@@ -64,6 +66,13 @@ class ContinuityTest(unittest.TestCase):
                     transcript = self.runtime("old")
                     with transcript.open("a", encoding="utf8") as stream:
                         stream.write(json.dumps({"type": "turn_context", "payload": {"effort": "xhigh"}}) + "\n")
+                elif mode == "runtime-null":
+                    c.atomic(self.root / '.dev-continuity/task/runtime-old.json', c.encode({'transcript': None}))
+                elif mode == "header-null":
+                    transcript.write_text(json.dumps({'type': 'session_meta', 'payload': None}) + '\n', encoding='utf8')
+                elif mode == "turn-list":
+                    with transcript.open('a', encoding='utf8') as stream:
+                        stream.write(json.dumps({'type': 'turn_context', 'payload': []}) + '\n')
                 elif mode == "scan-limit":
                     with transcript.open("ab") as stream:
                         stream.write(b' ' * (c.MAX_USAGE_SCAN + 1))
@@ -92,6 +101,7 @@ class ContinuityTest(unittest.TestCase):
         self.note['records'].append(self.record('settings', 'Use medium for this continuation.', kind='requirement'))
         self.note['continuation_settings'] = {'thinking': 'medium', 'source_record': 'settings', 'for_session': 'old'}
         revision = self.saved()
+        self.runtime('new', 'medium')
         for action in ('prepare', 'target', 'release', 'accept'):
             result = c.transfer(self.root, 'task', 'new' if action == 'accept' else 'old', revision, action, successor='new')
             revision = result['revision']
@@ -126,6 +136,40 @@ class ContinuityTest(unittest.TestCase):
         self.assertFalse(runtime.exists())
         with self.assertRaisesRegex(ValueError, 'only used at prepare'):
             c.transfer(self.root, 'task', 'old', result['revision'], 'target', successor='new', transcript=transcript)
+
+    def test_accept_checks_actual_settings_before_writer_transfer(self):
+        revision = self.saved()
+        for action in ('prepare', 'target', 'release'):
+            revision = c.transfer(self.root, 'task', 'old', revision, action, successor='new')['revision']
+        for model, effort in (('other-model', 'high'), ('example-model', 'xhigh')):
+            with self.subTest(model=model, effort=effort):
+                transcript = self.runtime('new', effort, model)
+                with self.assertRaisesRegex(ValueError, 'settings differ'):
+                    c.transfer(self.root, 'task', 'new', revision, 'accept', transcript=transcript)
+                value, actual_revision = c.load(self.root, 'task')
+                self.assertEqual(actual_revision, revision)
+                self.assertEqual(value['owner'], 'old')
+                self.assertEqual(value['handoff']['phase'], 'RELEASED')
+                self.assertFalse((self.root / '.dev-continuity/sessions/new.json').exists())
+        (self.root / '.dev-continuity/task/runtime-new.json').unlink()
+        with self.assertRaisesRegex(ValueError, 'transcript unavailable'):
+            c.transfer(self.root, 'task', 'new', revision, 'accept')
+        wrong = self.runtime('wrong', 'high')
+        with self.assertRaisesRegex(ValueError, 'session mismatch'):
+            c.transfer(self.root, 'task', 'new', revision, 'accept', transcript=wrong)
+        transcript = self.runtime('new')
+        result = c.transfer(self.root, 'task', 'new', revision, 'accept', transcript=transcript)
+        self.assertEqual(result['handoff']['settings_check']['status'], 'matched')
+        self.assertEqual(result['handoff']['settings_check']['source']['session'], 'new')
+        reset = self.record('reset', 'Use host defaults for this continuation.', kind='requirement')
+        revision = c.save(self.root, 'task', 'new', {'records': [reset], 'continuation_settings': {
+            'source_record': 'reset', 'for_session': 'new'}}, result['revision'], patch=True)['revision']
+        revision = self.review('new', revision)
+        for action in ('prepare', 'target', 'release', 'accept'):
+            result = c.transfer(self.root, 'task', 'default-new' if action == 'accept' else 'new', revision, action, successor='default-new')
+            revision = result['revision']
+        self.assertEqual(result['continuation_settings'], {})
+        self.assertEqual(result['handoff']['settings_check']['status'], 'explicit_defaults_requested')
 
     def record(self, key, text, **kwargs):
         source = self.root / "request.txt"
@@ -326,6 +370,11 @@ class ContinuityTest(unittest.TestCase):
         archived_revision = c.recall(self.root, "task")["archive_head"]
         self.assertTrue(c.recall(self.root, "task", history=True, revision=archived_revision)["historical_view"])
         self.assertEqual(len(c.recall(self.root, "task", history=True, revision=archived_revision)["records"]), 2)
+        history = c.recall(self.root, "task", history=True, query="paid calls", revision=revision, detail=False)
+        self.assertEqual([r["id"] for r in history["records"]], ["boundary"])
+        self.assertTrue(history["records"][0]["historical"])
+        self.assertEqual(history["remaining_critical_ids"], [])
+        self.assertFalse(history["execution_authorized"])
         with self.assertRaisesRegex(ValueError, "cannot be reused"):
             c.save(self.root, "task", "old", {"records": self.note["records"]}, revision, patch=True)
         many = [self.record("extra-" + str(n), "Other required constraint " + str(n)) for n in range(10)]
@@ -351,6 +400,7 @@ class ContinuityTest(unittest.TestCase):
             successor = "successor-" + str(n)
             revision = c.transfer(self.root, "task", owner, revision, "target", successor)["revision"]
             revision = c.transfer(self.root, "task", owner, revision, "release")["revision"]
+            self.runtime(successor)
             revision = c.transfer(self.root, "task", successor, revision, "accept")["revision"]
             owner = successor
             # Fresh process reads only the saved entrypoint, not this test's in-memory note.
@@ -418,6 +468,7 @@ class ContinuityTest(unittest.TestCase):
         delta = {"retire_records": [{"id": "release", "reason": "Completed release is historical evidence", "operation_id": "once"}]}
         preview = c.save(self.root, "task", "old", delta, revision, patch=True, archive_superseded=True, archive_completed=True, dry_run=True)
         self.assertEqual(c.load(self.root, "task")[1], revision)
+
         revision = c.save(self.root, "task", "old", delta, revision, patch=True, archive_superseded=True, archive_completed=True)["revision"]
         self.assertEqual(c.load(self.root, "task")[0]["note"]["operations"], [unknown])
         self.assertEqual(c.operation(self.root, "task", "once")["operation"], done)
@@ -437,6 +488,32 @@ class ContinuityTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "preserve requirements"):
             c.save(self.root, "task", "old", {"retire_records": [{"id": "boundary", "reason": "save space"}]}, revision, patch=True)
         self.assertLess(preview["capacity"]["note_bytes"], c.MAX_NOTE)
+
+    def test_current_id_lookup_does_not_load_unrelated_archives(self):
+        self.saved()
+        def unavailable(*args):
+            raise ValueError("archive damaged")
+            yield  # A failing iterator proves the current match stops before archive reads.
+        with patch.object(c, "archived_notes", unavailable):
+            result = c.lookup(self.root, "task", "boundary", "records")
+            self.assertTrue(result["found"])
+            self.assertFalse(result["execution_authorized"])
+            with self.assertRaisesRegex(ValueError, "archive damaged"):
+                c.lookup(self.root, "task", "missing", "records")
+
+    def test_record_original_slice_is_opt_in_and_retained(self):
+        revision = c.save(self.root, 'task', 'old', self.note, 'new', retain_sources=True)['revision']
+        original = (self.root / 'request.txt').read_bytes()
+        (self.root / 'request.txt').write_text('New unrelated version.', encoding='utf8')
+        self.assertNotIn('source', c.lookup(self.root, 'task', 'boundary', 'records'))
+        run = subprocess.run([sys.executable, str(Path(c.__file__)), 'record', '--project', str(self.root),
+                              '--task', 'task', '--id', 'boundary', '--source-index', '0'], capture_output=True, check=True)
+        result = json.loads(run.stdout)
+        self.assertEqual(result['source']['text'], original.decode('utf8'))
+        self.assertFalse(result['execution_authorized'])
+        self.assertEqual(c.load(self.root, 'task')[1], revision)
+        with self.assertRaisesRegex(ValueError, 'out of range'):
+            c.lookup(self.root, 'task', 'boundary', 'records', 1)
 
     def test_archive_crash_corruption_and_constant_size_head(self):
         revision = self.saved()

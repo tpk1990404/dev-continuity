@@ -2,7 +2,7 @@
 name: dev-continuity
 description: Maintain resumable development checkpoints, trace decisions to source records, and transfer unfinished work across conversations. Use for long development tasks, context pressure, interruption recovery, or handoff; skip routine one-step edits and unrelated questions.
 metadata:
-  version: "1.6.1"
+  version: "1.7.0"
 ---
 
 # 开发连续性
@@ -11,7 +11,7 @@ metadata:
 
 ## 恢复与更新
 
-恢复执行 scripts/continuity.py recall，固定 revision 读完当前关键项；核对目标、批次、决定及理由、验证边界、禁止事项、未完成操作和 next。同一 revision 已读内容不反复加载；状态变化查差异，跨压缩不假定旧阅读仍在上下文。按模块/问题用 recall --query，再用 record --id 查原文；关键依据不足继续检索，不凭摘要猜测。外部操作前用 operation --id 查当前与历史；“未找到”不授予权限。
+恢复执行 scripts/continuity.py recall，固定 revision 读完当前关键项；核对目标、批次、决定及理由、验证边界、禁止事项、未完成操作和 next。同一 revision 已读内容不反复加载，跨压缩不假定旧阅读仍在上下文。按模块用 recall --query，旧决定用 --history --query；record --id 查记录，--source-index N 显式读取一个已核对非敏感原文片段。关键依据不足继续检索，不凭摘要猜测。外部操作前用 operation --id 查当前与历史；“未找到”不授予权限。
 
 重要需求/纠正、技术取舍、验证完成/失败、阻塞或下一步变化后及时 save --patch，不等交接；中途被打断则在下一安全节点补齐。无实质变化不重存。保留源码无法解释的理由、限制、失败条件和未解问题，普通实现细节引用代码；不复制工具输出或压缩上一份摘要替代原文核对。用户报告、文件、运行加载、真实端到端分别记录；推测保持未核实。
 
@@ -45,7 +45,7 @@ Codex 本地记忆只辅助查稳定偏好、经验和历史入口；项目记�
 
 用 usage --project/--task/--session 跟随当前日志；unknown 不是余量充足，不猜比例。压缩先发生则恢复继续，到安全节点再判断。复核后预约一次 → 记录真实新任务 → 释放旧写入权 → 接棒执行 next；结果不明先查，不重复创建或并发写入。百分比不单独授权创建，目标完成或无独立下一步时不空转。
 
-接续默认沿用当前 owner 最近同一条实际 turn_context.model/effort，冻结于 prepare 回执；旧 continuation_settings 不能固定所有后续对话。有依据且在授权内的调整用新用户来源与 for_session=当前 owner 登记，只作用于该 owner 的接续；单改一项时另一项仍继承。创建传递 prepare 返回值，核对首轮模型和强度，不符先修正再接棒；日志路径缺失可在 prepare 用 --transcript 指向身份核验过的真实日志，设置未知则保持原任务继续，不猜默认。继承授权须符合宿主工具要求；不能自动替换不支持的模型/强度。明确恢复默认见操作参考。新任务取得实质进展前不再迁移。
+接续默认沿用当前 owner 最近同一条实际 turn_context.model/effort，冻结于 prepare 回执。有依据且在授权内的调整用新用户来源与 for_session=当前 owner 登记，只作用于该 owner 的接续；单改一项时另一项继承。创建传递 prepare 返回值，不用旧笔记值。新 policy4 在 accept 写入权前核验接棒方实际模型/强度；缺日志路径可用 --transcript 指向本对话真实日志，不符或未知则保持只读，核实纠正后再接棒，不另建对话绕过。旧预约保留原策略；明确恢复默认不假报实际匹配。继承授权须符合宿主要求，不能自动替换不支持的设置。新任务取得实质进展前不再迁移。
 
 Hooks 只低频记录机器状态和短提示，不生成语义摘要、增加模型调用、定时轮询或强制Stop续跑，不承诺应用退出后继续。能力缺失时保留短交接正文；不伪造接棒完成。
 

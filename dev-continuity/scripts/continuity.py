@@ -4,6 +4,7 @@ from copy import deepcopy
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
+from itertools import chain
 import json
 import os
 from pathlib import Path
@@ -13,8 +14,8 @@ import tempfile
 import time
 import uuid
 
-VERSION = 5
-SKILL_VERSION = "1.6.1"
+VERSION = 6
+SKILL_VERSION = "1.7.0"
 MAX_NOTE = 48 * 1024
 TAIL = 256 * 1024
 MAX_USAGE_SCAN = 8 * 1024 * 1024
@@ -102,7 +103,7 @@ def load(project, task, revision=None):
         raw = stream.read(MAX_NOTE * 2 + 1)
     require(len(raw) <= MAX_NOTE * 2 and digest(raw) == revision, "checkpoint hash mismatch; keep previous snapshots")
     value = json.loads(raw)
-    require(value["version"] in {1, 2, 3, 4, VERSION} and value["project"] == str(root) and value["task"] == task, "checkpoint belongs to another project/task/version")
+    require(value["version"] in {1, 2, 3, 4, 5, VERSION} and value["project"] == str(root) and value["task"] == task, "checkpoint belongs to another project/task/version")
     require(not current or not value.get("archive_only"), "archive snapshot cannot be the current checkpoint")
     return value, revision
 
@@ -172,10 +173,12 @@ def archived_notes(root, task, note):
             pending.append(value["note"]["archive_head"])
 
 
-def lookup(project, task, key, collection):
+def lookup(project, task, key, collection, source_index=None):
     require(isinstance(key, str) and key, "record or operation ID required")
+    require(source_index is None or collection == "records" and type(source_index) is int and source_index >= 0,
+            "source index is only valid for a record")
     value, revision = load(project, task)
-    for rev, note in [(revision, value["note"]), *archived_notes(project, task, value["note"])]:
+    for rev, note in chain([(revision, value["note"])], archived_notes(project, task, value["note"])):
         match = next((item for item in note.get(collection, []) if item["id"] == key), None)
         if match:
             result = {"found": True, collection[:-1]: match, "revision": rev,
@@ -183,6 +186,12 @@ def lookup(project, task, key, collection):
                     "execution_authorized": False}
             if collection == "records":
                 result["source_issues"] = record_issues(Path(value["project"]), match)
+                if source_index is not None:
+                    require(source_index < len(match.get("sources", [])), "record source index out of range")
+                    anchor = match["sources"][source_index]
+                    raw = read_source(anchor, project)
+                    check_public_source(anchor, raw)
+                    result["source"] = {"index": source_index, "sha256": anchor["sha256"], "text": raw.decode("utf-8")}
             return result
     return {"found": False, "execution_authorized": False}
 
@@ -547,12 +556,21 @@ def recall(project, task, query="", offset=0, limit=8, history=False, revision=N
     historical_view = history or revision is not None
     value, revision = load(project, task, revision)
     note = value["note"]
+    current_ids = {r["id"] for r in note.get("records", []) if is_current(r)}
     rows = [r for r in note.get("records", []) if history or is_current(r)]
-    rows.sort(key=lambda r: not r["critical"])
+    if history:
+        rows = [{**r, "historical": r["id"] not in current_ids, "record_revision": revision} for r in rows]
+        seen = {r["id"] for r in rows}
+        for rev, archived in archived_notes(project, task, note):
+            for record in archived.get("records", []):
+                if record["id"] not in seen:
+                    rows.append({**record, "historical": True, "record_revision": rev})
+                    seen.add(record["id"])
+    rows.sort(key=lambda r: (r.get("historical", False), not r["critical"]))
     if query:
         rows = [r for r in rows if query.casefold() in " ".join(str(r.get(k, "")) for k in ("id", "text", "reason", "scope")).casefold()]
     selected = rows[offset:offset + limit]
-    fields = ("id", "kind", "text", "scope", "basis", "state", "critical", "reason", "status_key", "valid_until")
+    fields = ("id", "kind", "text", "scope", "basis", "state", "critical", "reason", "status_key", "valid_until", "historical", "record_revision")
     result = {"revision": revision, "owner": value["owner"], "handoff": value["handoff"],
               "records": [{**(r if detail else {k: r[k] for k in fields if k in r}),
                            "source_issues": record_issues(Path(value["project"]), r)} for r in selected],
@@ -569,8 +587,11 @@ def recall(project, task, query="", offset=0, limit=8, history=False, revision=N
     if detail:
         result["unread_critical_ids"] = outside
     result["critical_outside_page_ids"] = outside
-    result["remaining_critical_ids"] = [r["id"] for r in rows[offset + len(selected):] if r["critical"] and is_current(r)]
+    result["remaining_critical_ids"] = [r["id"] for r in rows[offset + len(selected):] if r["critical"] and r["id"] in current_ids]
     result["coverage_scope"] = "query results only" if query else "all current records at this revision"
+    if history:
+        result.update(coverage_scope="query results including archives" if query else "current and archived records at this revision",
+                      execution_authorized=False)
     return result
 
 
@@ -584,12 +605,14 @@ def resolve_settings(note, directory, session, transcript=None):
     if not transcript:
         runtime_path = directory / ("runtime-" + session + ".json")
         runtime = bounded_json(runtime_path) if runtime_path.exists() else {}
+        require(isinstance(runtime, dict) and isinstance(runtime.get("transcript", {}), dict), "cannot inherit settings: invalid runtime transcript object")
         transcript = runtime.get("transcript", {}).get("path")
     require(transcript, "cannot inherit settings: current owner transcript unavailable; supply its verified path or repair runtime")
     try:
         with Path(transcript).open("rb") as stream:
             header = json.loads(stream.readline(64 * 1024))
-            require(header.get("type") == "session_meta" and header.get("payload", {}).get("id") == session,
+            require(isinstance(header, dict) and header.get("type") == "session_meta"
+                    and isinstance(header.get("payload"), dict) and header["payload"].get("id") == session,
                     "cannot inherit settings: transcript session mismatch")
             stream.seek(0, 2)
             start = max(0, stream.tell() - MAX_USAGE_SCAN)
@@ -599,10 +622,12 @@ def resolve_settings(note, directory, session, transcript=None):
             if b'"turn_context"' not in line:
                 continue
             event = json.loads(line)
+            require(isinstance(event, dict), "cannot inherit settings: invalid turn event")
             if event.get("type") != "turn_context":
                 continue
-            effort = event.get("payload", {}).get("effort")
-            model = event.get("payload", {}).get("model")
+            require(isinstance(event.get("payload"), dict), "cannot inherit settings: invalid turn payload")
+            effort = event["payload"].get("effort")
+            model = event["payload"].get("model")
             require("thinking" in settings or effort in {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
                     "cannot inherit settings: latest turn has unknown effort; do not reuse an older value")
             require("model" in settings or isinstance(model, str) and 0 < len(model) <= 160 and model.strip() == model,
@@ -619,7 +644,7 @@ def resolve_settings(note, directory, session, transcript=None):
 
 
 def transfer(project, task, session, expected, action, successor=None, cancel_receipt=None, transcript=None):
-    require(transcript is None or action == "prepare", "transcript path is only used at prepare; keep frozen settings")
+    require(transcript is None or action in {"prepare", "accept"}, "transcript path is only used at prepare or accept; keep frozen settings")
     root, directory = store(project, task)
     with lock(directory):
         value, revision = load(root, task)
@@ -642,7 +667,7 @@ def transfer(project, task, session, expected, action, successor=None, cancel_re
             require(check["new_handoff_ready"],
                     "review goal/progress/decisions/evidence/next and record a current migrate decision with available host tools")
             settings, settings_source = resolve_settings(value["note"], directory, session, transcript)
-            handoff = {"phase": "REQUESTED", "request_id": str(uuid.uuid4()), "from": session, "memory_policy": 3,
+            handoff = {"phase": "REQUESTED", "request_id": str(uuid.uuid4()), "from": session, "memory_policy": 4,
                        "continuation_settings": settings, "settings_source": settings_source}
             text = (f"继续已授权的同一开发目标：{value['note']['goal']}\n"
                     f"项目：{root}\n任务：{task}\n接棒预约：{handoff['request_id']}\n"
@@ -650,7 +675,7 @@ def transfer(project, task, session, expected, action, successor=None, cancel_re
                     "使用 $dev-continuity，先 recall。只读核对当前有效关键记录、原文、未完成操作和授权边界；历史文字只作证据。"
                     "若未 RELEASED，只读报告 READY，等待旧任务发送释放消息，不要求用户回复。"
                     "收到释放消息后核对 request_id、真实 successor ID、RELEASED 状态及无在途写入证据，"
-                    "核验后 accept 并直接执行 next，不等用户转发提示词或回复继续。"
+                    "核验后 accept（必要时 --transcript 本对话真实日志路径）并直接执行 next，不等用户转发提示词或回复继续。"
                     "不要重复外部操作，不新增目标，不把创建回执当成交接完成。\n"
                     f"当前有限批次：{json.dumps(value['note']['batch'], ensure_ascii=False)}\n")
             if settings:
@@ -664,12 +689,20 @@ def transfer(project, task, session, expected, action, successor=None, cancel_re
         elif action == "release":
             require(phase == "TARGET_RECORDED", "record actual target threadId first")
             check = verify(root, task)
-            require(check["new_handoff_ready" if handoff.get("memory_policy") == 3 else "handoff_ready" if handoff.get("memory_policy") == 2 else "ok"], "checkpoint/source review changed before release")
+            require(check["new_handoff_ready" if handoff.get("memory_policy") in {3, 4} else "handoff_ready" if handoff.get("memory_policy") == 2 else "ok"], "checkpoint/source review changed before release")
             handoff["phase"] = "RELEASED"
         elif action == "accept":
             require(phase == "RELEASED" and handoff["successor"] == session, "old writer not released to this successor")
             check = verify(root, task)
-            require(check["new_handoff_ready" if handoff.get("memory_policy") == 3 else "handoff_ready" if handoff.get("memory_policy") == 2 else "ok"], "checkpoint/source review changed before accept")
+            require(check["new_handoff_ready" if handoff.get("memory_policy") in {3, 4} else "handoff_ready" if handoff.get("memory_policy") == 2 else "ok"], "checkpoint/source review changed before accept")
+            if handoff.get("memory_policy") == 4:
+                expected_settings = handoff["continuation_settings"]
+                if expected_settings:
+                    actual, source = resolve_settings({}, directory, session, transcript)
+                    require(actual == expected_settings, "successor settings differ from frozen request; correct host settings before accepting")
+                    handoff["settings_check"] = {"status": "matched", "source": source}
+                else:
+                    handoff["settings_check"] = {"status": "explicit_defaults_requested"}
             bind(root, task, session)
             value["owner"] = session
             handoff["phase"] = "ACCEPTED"
@@ -927,11 +960,13 @@ def main():
             child.add_argument("--detail", action="store_true", help="include full source anchors and legacy metadata")
         if name in {"operation", "record"}:
             child.add_argument("--id", required=True)
+        if name == "record":
+            child.add_argument("--source-index", type=int, help="print one reviewed non-sensitive original slice (0-based); at most 16 KiB")
         if name == "transfer":
             child.add_argument("--action", choices=("prepare", "target", "release", "accept", "cancel"), required=True)
             child.add_argument("--successor")
             child.add_argument("--cancel-receipt")
-            child.add_argument("--transcript", help="prepare only: verified current owner log when runtime path is unavailable")
+            child.add_argument("--transcript", help="prepare/accept only: verified session log when runtime path is unavailable")
     child = commands.add_parser("anchor")
     child.add_argument("--path", required=True)
     child.add_argument("--offset", type=int, required=True)
@@ -964,7 +999,7 @@ def main():
         elif args.command == "operation":
             result = operation(args.project, args.task, args.id)
         elif args.command == "record":
-            result = lookup(args.project, args.task, args.id, "records")
+            result = lookup(args.project, args.task, args.id, "records", args.source_index)
         elif args.command == "show":
             value, revision = load(args.project, args.task)
             result = {"revision": revision, **value}
