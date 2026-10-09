@@ -8,7 +8,14 @@ dev-continuity is an independent community skill for long development tasks, int
 
 This is not an OpenAI product, infinite memory, a background agent, or a promise of uninterrupted execution.
 
-## What's new in 1.7.0
+## What's new in 1.8.0
+
+- Prefer recovery in the same conversation. Context percentages, compaction and small batch transitions prompt a memory check, not mandatory conversation creation. Necessary handoffs retain their ownership and actual-setting checks.
+- Explicit `retire_operations` entries can archive verified, closed FAILED attempts with their original state, closure reason and receipt hash. Archived IDs cannot be reused; unknown and not-started operations remain current.
+- Routine delta saves do not need a refreshed migration review. Transfer stages already verify internally. Consult relevant records and original sources before asking users to repeat earlier decisions.
+- Reads schemas 1–7 and writes schema 7; policy 4 remains in use and existing reservations keep their checks. See [upgrade details](CHANGELOG.md#180--2026-10-09).
+
+### What's new in 1.7.0
 
 - Historical keyword queries now search reachable archives, deduplicate record IDs, and mark historical provenance. Archiving a decision no longer makes it invisible to keyword recovery.
 - Current-ID lookup does not eagerly read unrelated archives. `record --id ID --source-index N` optionally reads one hash-verified, reviewed source slice; default recovery output remains unchanged.
@@ -52,6 +59,8 @@ This is not an OpenAI product, infinite memory, a background agent, or a promise
 - Distinguishes current-state validity, historical source availability, and actual business acceptance.
 
 The checkpoint lock does not lock all application files. New Codex tasks require host tools and user authorization; the Python script cannot create conversations on its own.
+
+Codex already supports compaction and local memories. Memory generation happens in the background and can lag active work. This skill adds reviewable project state, user corrections, verification boundaries and non-repeatable operations. Continue in the same conversation when recovery works; conversation count is not a quality metric. See [official memory documentation](https://learn.chatgpt.com/docs/customization/memories) and [compaction guidance](https://developers.openai.com/cookbook/examples/gpt-5/codex_prompting_guide).
 
 ## Install
 
@@ -113,7 +122,7 @@ Data lives in the registered project's `.dev-continuity/`: immutable checkpoints
 
 The note limit is 48 KiB. Above 80%, a new handoff requires consolidation or a specific justification; above 95%, it is blocked to leave update headroom. Usage starts with a 256 KiB tail and expands to at most an 8 MiB range when needed, skipping large image/tool lines. Unknown reasons remain explicit and never imply low pressure. These reads do not add model calls.
 
-At 70%, consolidate. At 80%, after compaction or at a batch transition, record a migration decision at the next safe boundary. When authorization, independent remaining work, host tools and review are present, perform one handoff. Otherwise record the blocker or bounded deferral and recheck when the stated condition changes. Percentages alone do not authorize creation. `PreCompact` records machine state; semantic review still requires the agent.
+At 70%, save meaningful changes. At 80%, after compaction or at a batch transition, check recoverability at the next safe boundary and continue in the same conversation when it works. Evaluate a handoff only on user request, a host continuation problem, or concrete recovery failures that migration would help. Unknown usage does not imply spare capacity or justify migration. Use actual client samples rather than the model API's nominal window. `PreCompact` records machine state; semantic review still requires the agent.
 
 `verify --history` can report current state as valid while returning exit code 1 for missing historical originals. Smaller files do not establish net token or monetary savings.
 
@@ -128,8 +137,8 @@ python3 install.py restore --file /path/to/receipt.json
 
 CI targets Windows/Ubuntu and Python 3.11/3.14. It does not prove every Codex host's hook or task-creation integration. macOS is not included in this CI matrix.
 
-Restore refuses to overwrite files changed after installation. Supply the original `--home`/`--skill-dir` options when applicable. Version 1.7 reads schemas 1–6 and writes schema 6. Installation does not rewrite task data. Existing policy 1/2/3 reservations retain their settings and checks; new policy-4 reservations also verify actual successor settings before acceptance. `new_handoff_ready` still requires a migration decision and cross-field acknowledgement, which is not automated proof of semantic correctness.
+Restore refuses to overwrite files changed after installation. Supply the original `--home`/`--skill-dir` options when applicable. Version 1.8 reads schemas 1–7 and writes schema 7 so older writers cannot ignore retired failure IDs. Installation does not rewrite task data. Existing policy 1/2/3/4 reservations retain their settings and checks; new reservations still use policy 4. Necessary handoffs require `new_handoff_ready`, including migration review and actual successor settings. Routine continuation does not need a refreshed migration declaration; acknowledgements do not prove semantic correctness.
 
-After schema 6 writes, resume with a compatible version and preserve all subsequent progress. Restoring skill files does not authorize task-state rollback or replay.
+After schema 7 writes, resume with a compatible version and preserve all subsequent progress. Restoring skill files does not authorize task-state rollback or replay.
 
 Use [Issues](https://github.com/tpk1990404/dev-continuity/issues) for reproducible bugs and proposals, and private security reporting for sensitive findings. Licensed under the [MIT License](LICENSE).

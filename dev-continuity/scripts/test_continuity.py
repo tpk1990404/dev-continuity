@@ -501,6 +501,71 @@ class ContinuityTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "archive damaged"):
                 c.lookup(self.root, "task", "missing", "records")
 
+    def test_closed_failure_archive_preserves_receipt_and_blocks_replay(self):
+        failed = {"id": "failed-release", "state": "FAILED", "receipt": "request.txt", "retry": "query receipt; a new attempt needs a new ID"}
+        unknown = {"id": "unknown", "state": "STARTED_UNKNOWN", "receipt": "unknown", "retry": "query first"}
+        self.note["operations"] = [failed, unknown]
+        revision = self.saved()
+        value, _ = c.load(self.root, "task")
+        value["version"] = 6  # Existing 1.7 checkpoints can adopt the new archival path.
+        original_records = deepcopy(value["note"]["records"])
+        _, directory = c.store(self.root, "task")
+        revision = c.publish(directory, value)
+        delta = {"retire_operations": [{"id": failed["id"], "reason": "Receipt confirms the failed attempt ended; later candidate succeeded."}]}
+        preview = c.save(self.root, "task", "old", delta, revision, patch=True, dry_run=True)
+        self.assertEqual(preview["retired_operations"], 1)
+        self.assertEqual(c.load(self.root, "task")[1], revision)
+        atomic = c.atomic
+        def interrupted(path, raw):
+            if path.name == "latest.json":
+                raise OSError("interrupted publication")
+            atomic(path, raw)
+        with patch.object(c, "atomic", interrupted), self.assertRaises(OSError):
+            c.save(self.root, "task", "old", delta, revision, patch=True)
+        self.assertEqual(c.load(self.root, "task")[1], revision)
+        self.assertFalse(c.operation(self.root, "task", failed["id"])["historical"])
+        revision = c.save(self.root, "task", "old", delta, revision, patch=True)["revision"]
+        value, _ = c.load(self.root, "task")
+        self.assertEqual(value["version"], 7)
+        self.assertEqual(value["note"]["operations"], [unknown])
+        self.assertEqual(value["note"]["records"], original_records)
+        self.assertFalse(c.verify(self.root, "task")["semantic_review_current"])
+        result = c.operation(self.root, "task", failed["id"])
+        self.assertTrue(result["historical"])
+        self.assertFalse(result["execution_authorized"])
+        self.assertEqual(result["receipt_issues"], [])
+        self.assertEqual({k: v for k, v in result["operation"].items() if k != "retired"}, failed)
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            c.save(self.root, "task", "old", {"operations": [{**failed, "state": "NOT_STARTED"}]}, revision, patch=True)
+        revision = c.save(self.root, "task", "old", {"operations": [result["operation"]]}, revision, patch=True)["revision"]
+        self.assertEqual(c.load(self.root, "task")[0]["note"]["operations"], [unknown])
+        (self.root / "request.txt").write_text("changed receipt", encoding="utf8")
+        self.assertEqual(c.operation(self.root, "task", failed["id"])["receipt_issues"], ["changed_or_unavailable"])
+
+    def test_failure_retirement_cannot_hide_pending_or_newly_reclassified_work(self):
+        operations = [{"id": state.lower(), "state": state, "receipt": "request.txt", "retry": "query before any attempt"}
+                      for state in ("NOT_STARTED", "STARTED_UNKNOWN", "FAILED", "SUCCEEDED")]
+        self.note["operations"] = operations
+        revision = self.saved()
+        def retire(key):
+            return {"retire_operations": [{"id": key, "reason": "Closed after receipt review"}]}
+        for key in ("not_started", "started_unknown", "succeeded", "missing"):
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "previously FAILED"):
+                c.save(self.root, "task", "old", retire(key), revision, patch=True)
+        changed = {**operations[1], "state": "FAILED"}
+        with self.assertRaisesRegex(ValueError, "previously FAILED"):
+            c.save(self.root, "task", "old", {**retire(changed["id"]), "operations": [changed]}, revision, patch=True)
+        with self.assertRaisesRegex(ValueError, "managed"):
+            c.save(self.root, "task", "old", {"operations": [{**operations[2], "retired": {"reason": "hide"}}]}, revision, patch=True)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            c.save(self.root, "task", "old", {"retire_operations": retire('failed')['retire_operations'] * 2}, revision, patch=True)
+        with self.assertRaisesRegex(ValueError, "possible secret"):
+            c.save(self.root, "task", "old", {"retire_operations": [{"id": "failed", "reason": 'sk-' + 'a' * 24}]}, revision, patch=True)
+        (self.root / "request.txt").unlink()
+        with self.assertRaises(ValueError):
+            c.save(self.root, "task", "old", retire("failed"), revision, patch=True)
+        self.assertEqual(c.load(self.root, "task")[1], revision)
+
     def test_record_original_slice_is_opt_in_and_retained(self):
         revision = c.save(self.root, 'task', 'old', self.note, 'new', retain_sources=True)['revision']
         original = (self.root / 'request.txt').read_bytes()

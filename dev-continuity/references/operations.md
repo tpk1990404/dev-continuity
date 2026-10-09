@@ -25,7 +25,7 @@
 
 `operations` 条目：`{"id":"稳定操作ID","state":"STARTED_UNKNOWN","receipt":"脱敏证据路径或尚无回执","retry":"先查询结果"}`。`evidence` 条目写验证层、日期、结果、路径及适用版本。`files` 只列与恢复正确性相关的项目相对文件，脚本记录其 SHA-256；勿加入密钥文件或正在持续追加的大日志。`sources` 放下述原文 anchor。需要省篇幅时引用已有文档；不可省略不可重复操作及未解决问题。完成操作归档后仍用 operation --id 检索；短入口不逐项重复已完成台账。`compaction_limit` 仅在实际 total-scope 阈值已核实时填写正整数；其他情况不填。
 
-新任务增加 records；格式、纠正、来源与复核见 [记忆格式](memory.md)。旧JSON仍能读取/保存，新 prepare 要求 batch 和当前迁移复核。batch 范围从已有授权与计划取，不以“找更多问题”代替完成条件；next只推进本批缺口，批次完成再登记下一已授权批次。恢复前核对目标/停止指示，不重复展开已有同版本验证。首次登记使用真实项目目录；Hook不能从父目录发现隔离子目录中的登记。
+新任务增加 records；格式、纠正、来源、失败归档与复核见 [记忆格式](memory.md)。旧JSON仍能读取/保存，新 prepare 要求 batch 和当前迁移复核。batch 范围从已有授权与计划取，不以“找更多问题”代替完成条件；next只推进本批缺口，批次完成再登记下一已授权批次。恢复前核对目标/停止指示，不重复展开已有同版本验证。首次登记使用真实项目目录；Hook不能从父目录发现隔离子目录中的登记。
 
 默认无需登记固定模型/强度：prepare 读取当前 owner 的最新实际 model/effort。确需在下一接续主动调整、且有授权依据时，登记 continuation_settings，例如 {"thinking":"medium","source_record":"本次调整要求ID","for_session":"当前owner的真实ID"}；只改一项时另一项继承实际设置。source_record须为当前已确认、critical且basis=user的有原文记录，不能以助手建议代替授权；变更设置或重新绑定 owner 必须使用新的用户依据。明确恢复默认写 {"source_record":"新的恢复默认要求ID","for_session":"当前owner的真实ID"}，本次返回空设置。
 
@@ -64,7 +64,7 @@ cost仅在审计/批次结束时按需运行，流式读取指定一个本地tra
 
 只有用户明确要求或有效的个人约定已授权自动接续同一目标时创建任务；无此授权交付 prompt 文件即可。Skill 自身不提供创建任务或外部操作的授权；项目与工具的更高优先级边界继续适用。
 
-1. 完成当前安全步骤，实际核对创建、投递及等待工具和既有授权；按记忆格式保存五字段复核与migrate决定，verify 确认 new_handoff_ready=true。`transfer --action prepare` 生成 `handoff-prompt.md` 及唯一预约。重复 prepare 拒绝。新 prepare 要求有限batch、有效关键来源、容量余量及与当前正文匹配的memory_review；ok=true或旧handoff_ready=true单独不足。未知操作须在语义核验时确认已停止写入、结果如何查询；不以迁移触发重放。
+1. 先确认迁移确有必要；原对话压缩后恢复正常、仅有下一批或达到比例，不构成必须迁移。完成当前安全步骤，核对创建、投递及等待工具和既有授权；按记忆格式保存五字段复核与migrate理由。`transfer --action prepare` 内部verify并要求 new_handoff_ready=true，然后生成 `handoff-prompt.md` 及唯一预约；不必在各阶段前后重复完整verify。重复 prepare 拒绝。新 prepare 要求有限batch、有效关键来源、容量余量及与当前正文匹配的memory_review；ok=true或旧handoff_ready=true单独不足。未知操作须在语义核验时确认已停止写入、结果如何查询；不以迁移触发重放。
 2. 用已有 create_thread：先 list_projects，遵守worktree/local规则、目录及设置继承授权。传递prepare返回的continuation_settings，不能直接传note历史字段。默认从当前owner的runtime.transcript.path读取最近同一条turn_context.model/effort，校验session_meta身份，最多读取尾部8 MiB；未登记路径时 prepare 可加 --transcript REAL_LOG。缺文件、身份不符、字段/格式未知或超界未找到均在预约前失败，不回退旧值。仅 for_session 对应当前owner的调整生效：部分调整继承另一项，完整指定或明确恢复默认可用用户依据；不支持的设置不能自动替换。handoff冻结值不在后续阶段重算；旧预约按原值完成。提示词携带短入口、request_id、批次及来源，要求先只读核对；未释放则READY并等旧任务消息，不fork整段聊天。
 3. 调用返回真实 threadId 后 `transfer --action target --successor ID`。只有 clientThreadId 时等待解析；回执不明先查创建结果，禁止再次 create。失败记录保留，不自动清除预约。
 4. 确认旧任务代码/外部操作已停且现场仍匹配，`transfer --action release`；之后旧任务仅查询回执和发送交接消息，不再写本任务文件。用 `send_message_to_thread` 将 `request_id`、真实 successor ID、RELEASED revision 和无在途写入的说明发给刚创建的任务，明确“核验后 accept，立即继续，不等待用户回复”。消息失败先查投递/运行结果，不自动重复释放或创建。
@@ -75,7 +75,9 @@ cost仅在审计/批次结束时按需运行，流式读取指定一个本地tra
 
 工具不可用/接续失败时，保留当前owner、预约及已有handoff-prompt；不要循环新建任务、启动调度器或假报成功。尚未预约且创建/投递工具缺失，记录unavailable与具体缺失能力、下次能力变化时复核，并简短告知用户。在原任务压缩恢复后继续独立事项；不重复搜索未变化的工具，必要时交付短正文。任务完整结束时保存 `"completed": true`，用户停止优先，不用Stop钩子强制续跑。
 
-70%整理；80%、新压缩、批次切换后的下一安全节点必须有迁移决定。具备已授权独立next、接续工具、来源复核与无未决创建时执行一次接棒；暂缓写具体原因与下一业务节点，不以“还能继续”无限延期。已结束或待用户决定且无独立next时不创建。正文变化使决定不再current；Hook在新压缩后标记due_at_safe_boundary，复核后更新at。阈值不单独授权创建；Hooks不执行调度、工具创建或语义复核。新任务先取得实质进展再考虑迁移。
+70%提示保存，80%、新压缩及批次切换提示下一安全节点核对记忆；均不要求新建对话或重写迁移声明。恢复完整就原对话继续，缺信息先查原文。仅用户要求迁移、宿主不能可靠续跑，或已有具体恢复问题且迁移确有帮助时启动以上流程，仍须独立授权next、工具、来源复核及无未决创建。实际问题暂不能解决时记录defer/unavailable与复核节点；原对话正常继续不是违规暂缓。用户暂不接棒、已结束或无独立next时不创建。
+
+Hook的due_at_safe_boundary表示记忆核对提醒，不是迁移义务。semantic_review_current=false阻止新交接，不阻止原owner保存并继续；准备迁移时再生成与当前正文匹配的复核。Hooks不执行调度、工具创建或语义复核，不能把对话数量当作连续性指标。优先完成一次可验证业务闭环，减少只完成检查点维护就迁移的情况。
 
 只有查询确认创建失败，或已创建的 successor 明确停止且未接手后，旧 owner 才可保存脱敏查询回执并执行 `transfer --action cancel --cancel-receipt PROJECT_RELATIVE_RECEIPT`。脚本保存回执哈希与原预约；取消后可恢复旧任务。回执不明不可取消预约，不通过取消规避重复创建检查。
 

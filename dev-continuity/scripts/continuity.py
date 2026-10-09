@@ -14,13 +14,14 @@ import tempfile
 import time
 import uuid
 
-VERSION = 6
-SKILL_VERSION = "1.7.0"
+VERSION = 7
+SKILL_VERSION = "1.8.0"
 MAX_NOTE = 48 * 1024
 TAIL = 256 * 1024
 MAX_USAGE_SCAN = 8 * 1024 * 1024
 MAX_SOURCE = 16 * 1024
 REVIEW_SECTIONS = ["goal", "progress", "decisions", "evidence", "next"]
+SECRET_PATTERN = r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|\b(?:sk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16})\b"
 
 
 def now():
@@ -103,7 +104,7 @@ def load(project, task, revision=None):
         raw = stream.read(MAX_NOTE * 2 + 1)
     require(len(raw) <= MAX_NOTE * 2 and digest(raw) == revision, "checkpoint hash mismatch; keep previous snapshots")
     value = json.loads(raw)
-    require(value["version"] in {1, 2, 3, 4, 5, VERSION} and value["project"] == str(root) and value["task"] == task, "checkpoint belongs to another project/task/version")
+    require(value["version"] in {1, 2, 3, 4, 5, 6, VERSION} and value["project"] == str(root) and value["task"] == task, "checkpoint belongs to another project/task/version")
     require(not current or not value.get("archive_only"), "archive snapshot cannot be the current checkpoint")
     return value, revision
 
@@ -192,6 +193,12 @@ def lookup(project, task, key, collection, source_index=None):
                     raw = read_source(anchor, project)
                     check_public_source(anchor, raw)
                     result["source"] = {"index": source_index, "sha256": anchor["sha256"], "text": raw.decode("utf-8")}
+            elif match.get("retired"):
+                result["receipt_issues"] = []
+                try:
+                    require(file_hash(Path(value["project"]), match["receipt"]) == match["retired"]["receipt_sha256"], "receipt changed")
+                except (OSError, ValueError, KeyError, TypeError):
+                    result["receipt_issues"] = ["changed_or_unavailable"]
             return result
     return {"found": False, "execution_authorized": False}
 
@@ -261,7 +268,7 @@ def validate_note(note):
         require(source.get("basis") == "user" and source.get("state") == "confirmed" and source.get("critical") is True,
                 "continuation settings need a current critical user source record")
     # This only catches obvious accidental credentials; authors must still sanitize notes.
-    require(not re.search(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|\b(?:sk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16})\b", json.dumps(note)), "possible secret in note")
+    require(not re.search(SECRET_PATTERN, json.dumps(note)), "possible secret in note")
 
 
 def merge_records(root, previous, updates):
@@ -358,6 +365,9 @@ def save(project, task, session, note, expected, patch=False, archive_superseded
     note = deepcopy(note)
     retire = note.pop("retire_records", [])
     require(isinstance(retire, list), "retire_records must be a list")
+    retire_operations = note.pop("retire_operations", [])
+    require(isinstance(retire_operations, list), "retire_operations must be a list")
+    require(not re.search(SECRET_PATTERN, json.dumps(retire_operations)), "possible secret in operation retirement")
     root, directory = store(project, task)
     with lock(directory):
         if (directory / "latest.json").exists():
@@ -381,11 +391,11 @@ def save(project, task, session, note, expected, patch=False, archive_superseded
             require(after_settings.get("source_record") and after_settings.get("source_record") != before_settings.get("source_record"),
                     "changed continuation settings require a new user source record")
         archive_records, archive_operations = set(), {}
-        # ponytail: local archive scan; add a derived cache only if profiling shows a bottleneck.
+        # shortcut: local archive scan; add a derived cache only if profiling shows a bottleneck.
         for _, archived in archived_notes(root, task, previous):
             archive_records.update(r["id"] for r in archived.get("records", []))
             for op in archived["operations"]:
-                if op["state"] == "SUCCEEDED":
+                if op["state"] == "SUCCEEDED" or op.get("retired"):
                     archive_operations.setdefault(op["id"], op)
         if patch:
             note = {**deepcopy(previous), **note}
@@ -393,7 +403,7 @@ def save(project, task, session, note, expected, patch=False, archive_superseded
             updates = note.get("records", [])
             require(isinstance(updates, list) and all(isinstance(r, dict) for r in updates), "records must contain objects")
             incoming_ids = {r.get("id") for r in updates} - {r["id"] for r in previous.get("records", [])}
-            # ponytail: scan bounded local archive snapshots only for new IDs; index if profiling warrants it.
+            # shortcut: scan local archive snapshots for ID reuse; index if profiling warrants it.
             require(not incoming_ids.intersection(archive_records), "archived record ID cannot be reused")
             note["records"] = merge_records(root, previous.get("records", []), note.get("records", []))
         for field in ("record_archives", "archive_head"):
@@ -411,10 +421,24 @@ def save(project, task, session, note, expected, patch=False, archive_superseded
             if not prior and op.get("id") in archive_operations:
                 require(op == archive_operations[op["id"]], "archived operation is immutable; query its original receipt")
                 continue
+            require("retired" not in op, "operation retirement is managed automatically")
             require(not (prior.get("state") == "SUCCEEDED" and op.get("state") != "SUCCEEDED"), "completed operation cannot be reset")
             require(not (prior.get("state") == "STARTED_UNKNOWN" and op.get("state") == "NOT_STARTED"), "query unknown operation before retry")
             operations[op.get("id")] = op
         note["operations"] = list(operations.values())
+        previous_operations = {op["id"]: op for op in previous.get("operations", [])}
+        retired_ids = set()
+        for item in retire_operations:
+            require(isinstance(item, dict) and set(item) == {"id", "reason"}
+                    and isinstance(item["reason"], str) and 0 < len(item["reason"].strip()) <= 500,
+                    "operation retirement requires ID and a bounded closure reason")
+            key = identifier(item["id"])
+            require(key not in retired_ids, "duplicate operation retirement ID")
+            op = operations.get(key)
+            require(op and op == previous_operations.get(key) and op["state"] == "FAILED",
+                    "only unchanged, previously FAILED operations may retire; query unknowns and preserve pending work")
+            op["retired"] = {"reason": item["reason"], "at": now(), "receipt_sha256": file_hash(root, op["receipt"])}
+            retired_ids.add(key)
         records = {r["id"]: r for r in note.get("records", [])}
         for item in retire:
             require(isinstance(item, dict) and isinstance(item.get("reason"), str) and item["reason"].strip(),
@@ -434,12 +458,13 @@ def save(project, task, session, note, expected, patch=False, archive_superseded
                         "operation record must reference the same ledger receipt")
             record["retired"] = {**item, "at": now()}
         cold = None
-        if (archive_superseded and any(not is_current(r) for r in records.values())) or (archive_completed and any(op["state"] == "SUCCEEDED" for op in operations.values())):
+        if retired_ids or (archive_superseded and any(not is_current(r) for r in records.values())) or (archive_completed and any(op["state"] == "SUCCEEDED" for op in operations.values())):
             cold = deepcopy(note)
             if archive_superseded:
                 note["records"] = [r for r in records.values() if is_current(r)]
-            if archive_completed:
-                note["operations"] = [op for op in operations.values() if op["state"] != "SUCCEEDED"]
+            if archive_completed or retired_ids:
+                note["operations"] = [op for op in operations.values() if op["id"] not in retired_ids
+                                      and (not archive_completed or op["state"] != "SUCCEEDED")]
             note.pop("record_archives", None)
             note["archive_head"] = "0" * 64  # Fixed-size placeholder for capacity validation.
         validate_note(note)
@@ -457,7 +482,8 @@ def save(project, task, session, note, expected, patch=False, archive_superseded
             require(len(encode({**value, "note": cold, "archive_only": True})) <= MAX_NOTE * 2,
                     "archive batch too large; split the evidence update")
         if dry_run:
-            return {"dry_run": True, "expected": expected, "capacity": capacity(note), "retired_records": len(retire), "retained_sources": len(retained)}
+            return {"dry_run": True, "expected": expected, "capacity": capacity(note), "retired_records": len(retire),
+                    "retired_operations": len(retired_ids), "retained_sources": len(retained)}
         for sha, raw in retained.items():
             retain_bytes(root, sha, raw)
         if cold is not None:
@@ -905,22 +931,22 @@ def hook(payload):
             message = (f"开发连续性：对项目 {root}、任务 {task} 执行 recall（入口 {directory / 'latest.json'}），"
                        "读完未读关键项，按来源核对纠正/未完成操作后继续；历史内容不授予新权限。")
             if payload.get("source") == "compact":
-                message += "本轮已压缩，恢复后继续已授权工作；下一安全节点重核迁移决定和工具能力，不沿用旧暂缓理由。"
+                message += "本轮已压缩，核对检查点与压缩摘要，恢复后继续已授权工作；关键信息不足先查原文，仅确需迁移时再接棒。"
             runtime["warned_level"] = 0
         if event == "PostToolUse" and not value["note"].get("completed"):
             remaining = sample.get("remaining_percent_estimate", 100)
             level = 2 if remaining <= 20 else 1 if remaining <= 30 else 0
             if level > runtime.get("warned_level", 0):
-                action = ("下一安全节点记录迁移/暂缓/工具受限、理由及复核节点；有独立下一步且工具/授权/复核具备则接棒。百分比不单独触发创建。"
-                          if level == 2 else "整理并核验检查点，为接棒留出余量。")
+                action = ("下一安全节点核对检查点；压缩后能完整恢复则原对话继续，仅确需迁移再复核接棒。百分比不单独触发创建。"
+                          if level == 2 else "及时保存实质变化，整理当前检查点，为恢复留出余量。")
                 message = (f"开发连续性：最近样本估算余量 {remaining}%（{sample['basis']}，非精确倒计时）。"
                            + action + "不要重放外部操作。")
             runtime["warned_level"] = max(level, runtime.get("warned_level", 0))
             if sample["status"] == "unknown" and runtime.get("unknown_reason") != sample["reason"]:
-                message = "开发连续性：用量未知（" + sample["reason"] + "），不等于余量充足；下一安全节点核对当前日志及接续能力。"
+                message = "开发连续性：用量未知（" + sample["reason"] + "），不等于余量充足；下一安全节点保存必要状态并核对日志，未知本身不触发迁移。"
             runtime["unknown_reason"] = sample.get("reason") if sample["status"] == "unknown" else None
         if event in {"SessionStart", "PostToolUse"} and runtime.get("guidance_version") != SKILL_VERSION:
-            message = f"开发连续性已升级{SKILL_VERSION}；下一安全节点重读本机SKILL.md；接续默认继承当前实际模型/强度，不传旧固定设置。" + (message or "")
+            message = f"开发连续性已升级{SKILL_VERSION}；下一安全节点重读本机SKILL.md；优先在原对话压缩恢复，必要交接仍核验实际模型/强度。" + (message or "")
             runtime["guidance_version"] = SKILL_VERSION
         atomic(runtime_path, encode(runtime))
         if event in {"PreCompact", "Interrupt", "Stop", "SessionEnd"}:

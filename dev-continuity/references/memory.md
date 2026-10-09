@@ -69,7 +69,17 @@ py -3 -X utf8 SCRIPT save --project PROJECT --task TASK --session SESSION --expe
 
 容量紧张、迁移或批量整理时先 dry-run，不必每次预检。verify 返回 capacity 与可归档数量；save 超限返回字段体积。当前正文仍限 48 KiB；冷快照至多 96 KiB，过大批次拆分。
 
---archive-superseded 移出已替代/已退役记录；--archive-completed 仅移出 SUCCEEDED 操作。FAILED、STARTED_UNKNOWN、NOT_STARTED 留在当前台账。归档操作仍按 ID 检查，禁止重置；完全相同的重存保持幂等。原 ID 不复用，不以新 ID 绕过单次许可。
+--archive-superseded 移出已替代/已退役记录；--archive-completed 仅移出 SUCCEEDED 操作。FAILED 默认保持当前；STARTED_UNKNOWN、NOT_STARTED 必须保持当前。归档操作仍按 ID 检查，禁止重置；完全相同的重存保持幂等。原 ID 不复用，不以新 ID 绕过单次许可。
+
+1.8允许把已确认结束、退出当前待办的失败显式归档，不再让历史失败永久挤占当前笔记：
+
+```json
+{"retire_operations":[{"id":"failed-attempt-id","reason":"已核对原回执，失败尝试已结束，后续候选另有回执；本项仅作历史查询"}]}
+```
+
+该输入随 save --patch 使用，无需额外归档开关。只接受上一检查点已为 FAILED、且本次未修改的操作，要求可读的项目内回执；理由最多500字符。脚本保留原 ID/state/receipt/retry，附退役理由、时间及回执SHA-256，先写不可变归档再发布入口。不能在同次patch把UNKNOWN改FAILED后藏入历史；仍需重试或结果不确定的条目继续留在当前。普通命令拼写错误无需逐条登记为外部操作，只有影响恢复、验证或重试安全的失败才进入台账。
+
+operation --id 仍返回完整失败与历史标记，核对回执摘要并通过 receipt_issues 报告改写/缺失；读取不授权重试，原 ID 不可改状态重用。原始失败回执保留，不用短索引替换或省略重试前提。是否确实结束仍由代理核对业务证据，不能把文件存在/哈希匹配当作自动证明。
 
 没有后续替代状态的完成验证，可在 patch 中显式退役：
 
@@ -90,10 +100,10 @@ py -3 -X utf8 SCRIPT save --project PROJECT --task TASK --session SESSION --expe
 完成内容核对后，把 verify 的 memory_basis_sha256 和完整 critical_ids 写入小 patch：
 
 ```json
-{"memory_review":{"basis_sha256":"实际值","critical_ids":["实际关键ID"],"checked_sections":["goal","progress","decisions","evidence","next"],"continuation":{"decision":"migrate","tools":"available","reason":"当前批次已安全结束，有已授权独立下一步，已核对本任务创建/投递工具","next_check":"接棒取得实质进展后","at":"实际复核时间，带时区"}}}
+{"memory_review":{"basis_sha256":"实际值","critical_ids":["实际关键ID"],"checked_sections":["goal","progress","decisions","evidence","next"],"continuation":{"decision":"migrate","tools":"available","reason":"原对话出现已核实的恢复问题，必要原文已补齐，迁移有助于继续；本步安全结束、下一步已授权且接续工具可用","next_check":"接棒取得实质进展后","at":"实际复核时间，带时区"}}}
 ```
 
-save --patch 后 verify 确认 new_handoff_ready。仅整理记忆可先保存basis/critical_ids；只有迁移决策节点才补checked_sections/continuation，不要求每次小改动都重新复核。decision 为 migrate/defer/unavailable，tools 为 available/unavailable/unknown；reason/next_check各1—500字符，at为真实带时区时间。工具能力须实际查询，不是写available就获得能力或授权。defer应给明确业务节点，unavailable给能力变化复核条件。正文变化使复核失效；新压缩使下一安全节点需重核，更新at记录新判断。来源/依赖/归档变化也会阻止交接。
+真正准备交接时，完成内容核对、取得basis/critical_ids并保存复核声明；prepare内部重新verify，不必再跑一遍相同验证。日常 save --patch 可保留失效的旧 memory_review，原对话继续不要求刷新它。decision 为 migrate/defer/unavailable，tools 为 available/unavailable/unknown；reason/next_check各1—500字符，at为真实带时区时间。工具能力须实际查询，不是写available就获得能力或授权。实际迁移问题待解决时defer给复核节点，unavailable给能力变化条件。正文变化使交接复核失效；新压缩要求核对记忆，但恢复正常无需重写迁移声明。来源/依赖/归档变化仍阻止交接。
 
 handoff_ready 保留旧策略的机械复核含义；semantic_review_current 表示本正文五字段已确认核对；continuation_review显示迁移决定是否对应当前正文；new_handoff_ready 才表示符合1.5新建预约条件。四者都不证明自然语言语义完整，不是外部权限。
 
@@ -109,4 +119,4 @@ source --project PROJECT --input ANCHOR.json --retain 可显式保存某段。�
 
 verify --history 按需审计历史原文，单独返回 history.ok，历史失配也返回非零退出码；当前 ok 与历史原文完整性不能混称。普通 verify 不重复扫描历史原文内容。
 
-1.7读取schema 1–6，新保存和交接写schema6，新预约policy4要求accept核验实际设置，避免旧脚本忽略门禁。for_session绑定来源owner，创建参数不含元数据。旧policy1/2/3预约保留冻结值与原检查，安装不改项目检查点，无需批量迁移。写过schema6的任务须用兼容版本继续；安装回滚不等于数据回滚，不能回退指针掩盖进展或已执行操作。
+1.8读取schema 1–7，新保存和交接写schema7，防止旧脚本忽略已退役失败的ID保护；新预约仍为policy4，接受前核验实际设置。for_session绑定来源owner，创建参数不含元数据。旧policy1/2/3/4预约保留冻结值与原检查，安装不改项目检查点，无需批量迁移。写过schema7的任务须用兼容版本继续；安装回滚不等于数据回滚，不能回退指针掩盖进展或已执行操作。

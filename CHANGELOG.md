@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.8.0 — 2026-10-09
+
+### Recover in place before considering migration
+
+- Compaction, context percentages and finite-batch transitions now prompt a memory check instead of requiring a successor whenever tools and independent work exist. Continue in the same conversation when checkpoint/source recovery succeeds; migrate only when requested or when a concrete host/recovery problem makes it useful. Missing source evidence must be recovered rather than hidden by creating a new conversation.
+- Routine `save --patch` no longer calls for refreshing a migration declaration. Prepare/release/accept still enforce their internal checks; documentation removes redundant verification between every phase. User stop instructions, writer ownership, source checks and actual model/effort matching remain in force.
+- Clarified the division between native compaction, background local memories and current project records. Consult relevant records before declaring an earlier decision unknown or asking the user to repeat it. Client usage samples, not a model API's nominal context window, govern local observations.
+
+### Archive closed failures without losing replay protection
+
+- New `retire_operations: [{id, reason}]` input explicitly archives unchanged operations already recorded as FAILED, only after their local receipt is readable and their closure has been reviewed. The immutable archive keeps the original ID/state/receipt/retry plus reason, time and receipt SHA-256. Unknown, not-started and newly reclassified operations cannot use this path.
+- `operation --id` retrieves archived failures and reports changed or missing closure receipts. Archived failure IDs cannot be reset or reused, and identical archival records remain idempotent. Publication interruption preserves the previous checkpoint.
+- Reads schemas 1–7 and writes schema 7; this prevents older code from ignoring retired failure IDs. Handoff policy stays at 4. Existing reservations retain their checks. Installation does not archive project data automatically, and reverting installed files never authorizes rolling back task progress.
+
+### Evidence and limits
+
+- The update addresses observed migration churn and persistent failed-operation growth. Regression checks cover schema-6 adoption, explicit retirement, receipt drift, forbidden reclassification/replay and publication interruption. No new dependency, model call, scheduler or telemetry was added.
+- Script tests establish mechanical invariants, not complete semantic recall. Input/output accounting and shorter notes do not establish net token savings; the effect of fewer migrations needs subsequent comparable use.
+
 ## 1.7.0 — 2026-09-30
 
 ### Recoverable memory and selective reading
