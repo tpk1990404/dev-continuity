@@ -8,7 +8,20 @@ dev-continuity is an independent community skill for long development tasks, int
 
 This is not an OpenAI product, infinite memory, a background agent, or a promise of uninterrupted execution.
 
-## What's new in 1.8.0
+## What's new in 1.8.2
+
+- **Stage review without reminder loops:** existing Hooks use stable batch IDs to prompt once when a new stage lacks a review. Ordinary saves and repeated compactions do not retrigger it or force conversation creation.
+- **Scoped temporary handoff restrictions:** preserve the original instruction and its scope; revisit at the relevant business boundary. Never automatically revoke it or silently broaden it into a permanent ban. Continue in place when recovery works.
+- Reuse a short `continuation` decision without repeating the full handoff audit. Source integrity, ownership and actual model/effort checks remain. No new dependencies, Hook registrations or model calls; net token savings have not been measured.
+- Includes the previously local 1.8.1 guidance and maintenance improvements. Schema 7, policy 4 and commands are unchanged; installation does not migrate project records. See [details](CHANGELOG.md#182--2026-10-16).
+
+### What's new in 1.8.1
+
+- Shorter everyday guidance; detailed archival and handoff procedures stay in existing references. Recovery in place, ownership and actual model/effort checks remain in force.
+- Conservative maintenance guidance: the current writer previews at a safe boundary, preserves verifiable history and source evidence, and checks each archived ID. Keep initial archival separate from requirement consolidation; never overwrite later progress with an old backup.
+- Data formats, commands and Hook configuration are unchanged. Installation does not modify project memory. No new search service, dependency or model call. See [details](CHANGELOG.md#181--2026-10-13).
+
+### What's new in 1.8.0
 
 - Prefer recovery in the same conversation. Context percentages, compaction and small batch transitions prompt a memory check, not mandatory conversation creation. Necessary handoffs retain their ownership and actual-setting checks.
 - Explicit `retire_operations` entries can archive verified, closed FAILED attempts with their original state, closure reason and receipt hash. Archived IDs cannot be reused; unknown and not-started operations remain current.

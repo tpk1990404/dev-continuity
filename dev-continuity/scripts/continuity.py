@@ -15,7 +15,7 @@ import time
 import uuid
 
 VERSION = 7
-SKILL_VERSION = "1.8.0"
+SKILL_VERSION = "1.8.2"
 MAX_NOTE = 48 * 1024
 TAIL = 256 * 1024
 MAX_USAGE_SCAN = 8 * 1024 * 1024
@@ -154,6 +154,22 @@ def continuation_review(note):
     current = review.get("basis_sha256") == memory_basis(note)
     return {"valid": valid, "current": current and valid, "decision": decision if valid else None,
             "next_check": decision.get("next_check") if valid else "next safe business boundary"}
+
+
+def stage_review(note, previous, decision):
+    """Bounded reminder state, never semantic approval or permission to migrate."""
+    batch_id = note.get("batch", {}).get("id")
+    key = digest(encode(decision["decision"])) if decision["valid"] else None
+    acknowledged = bool(key and key != previous.get("decision_key"))
+    if not batch_id or note.get("completed"):
+        return {"batch_id": batch_id, "decision_key": key, "pending": False, "notified": False}
+    if batch_id != previous.get("batch_id"):
+        # A fresh full review also covers first use; stale legacy decisions get one prompt.
+        reviewed = decision["current"] or (bool(previous) and acknowledged)
+        return {"batch_id": batch_id, "decision_key": key, "pending": not reviewed, "notified": False}
+    if acknowledged:
+        return {"batch_id": batch_id, "decision_key": key, "pending": False, "notified": False}
+    return previous
 
 
 def archived_notes(root, task, note):
@@ -918,6 +934,7 @@ def hook(payload):
             runtime["compacted_since_decision"] = True
         runtime["continuation_review"] = {**decision,
             "due_at_safe_boundary": not decision["current"] or runtime.get("compacted_since_decision", False)}
+        runtime["stage_review"] = stage_review(value["note"], runtime.get("stage_review", {}), decision)
         runtime.update(checked_at=time.time(), at=now(), event=event, revision=revision, usage=sample)
         runtime["skill_version"] = SKILL_VERSION
         transcript = payload.get("transcript_path")
@@ -945,6 +962,12 @@ def hook(payload):
             if sample["status"] == "unknown" and runtime.get("unknown_reason") != sample["reason"]:
                 message = "开发连续性：用量未知（" + sample["reason"] + "），不等于余量充足；下一安全节点保存必要状态并核对日志，未知本身不触发迁移。"
             runtime["unknown_reason"] = sample.get("reason") if sample["status"] == "unknown" else None
+        stage = runtime["stage_review"]
+        if (event in {"SessionStart", "PostToolUse"} and stage["pending"] and not stage["notified"]
+                and value["handoff"]["phase"] in {"NONE", "ACCEPTED", "CANCELLED"}):
+            message = ("开发连续性：下一安全节点做一次阶段复核：原目标/纠正/未完成是否齐全，原对话能否继续；"
+                       "暂不接棒须查原话范围，不能自动解除。不必换对话或重做完整审计。" + (message or ""))
+            stage["notified"] = True
         if event in {"SessionStart", "PostToolUse"} and runtime.get("guidance_version") != SKILL_VERSION:
             message = f"开发连续性已升级{SKILL_VERSION}；下一安全节点重读本机SKILL.md；优先在原对话压缩恢复，必要交接仍核验实际模型/强度。" + (message or "")
             runtime["guidance_version"] = SKILL_VERSION

@@ -911,6 +911,80 @@ class ContinuityTest(unittest.TestCase):
                     if frozen is not None:
                         self.assertEqual(result['handoff']['settings_source'], {'kind': 'legacy'})
 
+    def stage_event(self, event="PostToolUse", **extra):
+        runtime = self.root / '.dev-continuity/task/runtime-old.json'
+        state = json.loads(runtime.read_text())
+        state['checked_at'] = 0
+        runtime.write_text(json.dumps(state), encoding='utf-8')
+        return c.hook({'cwd': str(self.root), 'session_id': 'old', 'hook_event_name': event,
+                       'transcript_path': str(self.sample(used=10)), **extra})
+
+    def test_stage_change_surfaces_stale_deferral_once_without_compaction_loop(self):
+        revision = self.saved()
+        self.stage_event()
+        revision = c.save(self.root, 'task', 'old', {'next': ['run another check']}, revision, patch=True)['revision']
+        self.assertEqual(self.stage_event(), {})  # An ordinary edit is not a new stage.
+        batch = {**self.note['batch'], 'id': 'acceptance'}
+        revision = c.save(self.root, 'task', 'old', {'batch': batch}, revision, patch=True)['revision']
+        self.assertEqual(self.stage_event('Stop'), {})  # Never force another turn at Stop.
+        result = self.stage_event()
+        self.assertIn('阶段复核', result['hookSpecificOutput']['additionalContext'])
+        self.assertEqual(self.stage_event(), {})
+        self.stage_event('PreCompact')
+        result = self.stage_event('SessionStart', source='compact')
+        self.assertNotIn('阶段复核', result['hookSpecificOutput']['additionalContext'])
+        self.assertEqual(self.stage_event(), {})
+        self.assertEqual(c.load(self.root, 'task')[1], revision)
+
+    def test_upgrade_catches_unreviewed_stage_once_and_short_review_is_not_transfer_approval(self):
+        revision = self.saved()
+        revision = c.save(self.root, 'task', 'old', {'next': ['changed after the old deferral']}, revision, patch=True)['revision']
+        self.assertIn('阶段复核', self.stage_event()['hookSpecificOutput']['additionalContext'])
+        self.assertEqual(self.stage_event(), {})
+        value, _ = c.load(self.root, 'task')
+        review = deepcopy(value['note']['memory_review'])
+        review['continuation'] = self.decision('defer')
+        review['continuation']['reason'] = 'Checkpoint recovery works; retain the original user restriction.'
+        review['continuation']['next_check'] = 'Before implementing the accepted design'
+        revision = c.save(self.root, 'task', 'old', {'memory_review': review}, revision, patch=True)['revision']
+        self.assertEqual(self.stage_event(), {})
+        self.assertFalse(c.verify(self.root, 'task')['new_handoff_ready'])
+        state = json.loads((self.root / '.dev-continuity/task/runtime-old.json').read_text())
+        self.assertFalse(state['stage_review']['pending'])
+        # Checking the next stage in the same save must not cause a redundant reminder.
+        review['continuation']['at'] = c.now()
+        c.save(self.root, 'task', 'old', {'batch': {**self.note['batch'], 'id': 'implementation'},
+                                        'memory_review': review}, revision, patch=True)
+        self.assertEqual(self.stage_event(), {})
+
+    def test_stage_reminder_preserves_temporary_user_restriction_and_unknown_operation(self):
+        pause = self.record('temporary-pause', 'Do not hand off during device setup.', scope='device-setup')
+        self.note['records'].append(pause)
+        self.note['operations'] = [{'id': 'setup', 'state': 'STARTED_UNKNOWN', 'receipt': 'pending.json', 'retry': 'query first'}]
+        revision = self.saved()
+        self.stage_event()
+        revision = c.save(self.root, 'task', 'old', {'batch': {**self.note['batch'], 'id': 'next-stage'}}, revision, patch=True)['revision']
+        before, _ = c.load(self.root, 'task')
+        self.assertIn('阶段复核', self.stage_event()['hookSpecificOutput']['additionalContext'])
+        after, _ = c.load(self.root, 'task')
+        self.assertEqual(after, before)
+        self.assertEqual(c.lookup(self.root, 'task', 'temporary-pause', 'records')['record']['text'], pause['text'])
+        self.assertEqual(c.operation(self.root, 'task', 'setup')['operation']['state'], 'STARTED_UNKNOWN')
+        self.assertEqual(after['owner'], 'old')
+        self.assertEqual(after['handoff']['phase'], 'NONE')
+
+    def test_stage_reminder_skips_completed_and_reserved_work(self):
+        revision = self.saved()
+        revision = c.save(self.root, 'task', 'old', {'completed': True, 'next': []}, revision, patch=True)['revision']
+        result = self.stage_event()
+        self.assertNotIn('阶段复核', str(result))
+        revision = c.save(self.root, 'task', 'old', {'completed': False, 'next': ['continue']}, revision, patch=True)['revision']
+        revision = self.review('old', revision)
+        self.runtime('old')  # Restore the identity-bearing settings log after usage-only fixtures.
+        revision = c.transfer(self.root, 'task', 'old', revision, 'prepare')['revision']
+        self.assertNotIn('阶段复核', str(self.stage_event()))
+        self.assertEqual(c.load(self.root, 'task')[1], revision)
+
     def test_compaction_invalidates_deferral_and_capacity_exception_has_ceiling(self):
         revision=self.saved()
         payload={'cwd':str(self.root),'session_id':'old','hook_event_name':'SessionStart','transcript_path':str(self.sample())}

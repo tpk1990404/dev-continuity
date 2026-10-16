@@ -25,7 +25,7 @@
 
 `operations` 条目：`{"id":"稳定操作ID","state":"STARTED_UNKNOWN","receipt":"脱敏证据路径或尚无回执","retry":"先查询结果"}`。`evidence` 条目写验证层、日期、结果、路径及适用版本。`files` 只列与恢复正确性相关的项目相对文件，脚本记录其 SHA-256；勿加入密钥文件或正在持续追加的大日志。`sources` 放下述原文 anchor。需要省篇幅时引用已有文档；不可省略不可重复操作及未解决问题。完成操作归档后仍用 operation --id 检索；短入口不逐项重复已完成台账。`compaction_limit` 仅在实际 total-scope 阈值已核实时填写正整数；其他情况不填。
 
-新任务增加 records；格式、纠正、来源、失败归档与复核见 [记忆格式](memory.md)。旧JSON仍能读取/保存，新 prepare 要求 batch 和当前迁移复核。batch 范围从已有授权与计划取，不以“找更多问题”代替完成条件；next只推进本批缺口，批次完成再登记下一已授权批次。恢复前核对目标/停止指示，不重复展开已有同版本验证。首次登记使用真实项目目录；Hook不能从父目录发现隔离子目录中的登记。
+新任务增加 records；格式、纠正、来源、失败归档与复核见 [记忆格式](memory.md)。旧JSON仍能读取/保存，新 prepare 要求 batch 和当前迁移复核。batch 范围从已有授权与计划取，不以“找更多问题”代替完成条件；next只推进本批缺口，批次完成再登记下一已授权批次。每个实质批次用稳定且不复用的 batch.id，普通修改、验证和压缩不换 ID；同批内约定节点到达仍由代理复核，不为提醒人为拆批。恢复前核对目标/停止指示，不重复展开已有同版本验证。首次登记使用真实项目目录；Hook不能从父目录发现隔离子目录中的登记。
 
 默认无需登记固定模型/强度：prepare 读取当前 owner 的最新实际 model/effort。确需在下一接续主动调整、且有授权依据时，登记 continuation_settings，例如 {"thinking":"medium","source_record":"本次调整要求ID","for_session":"当前owner的真实ID"}；只改一项时另一项继承实际设置。source_record须为当前已确认、critical且basis=user的有原文记录，不能以助手建议代替授权；变更设置或重新绑定 owner 必须使用新的用户依据。明确恢复默认写 {"source_record":"新的恢复默认要求ID","for_session":"当前owner的真实ID"}，本次返回空设置。
 
@@ -59,6 +59,12 @@ anchor 默认不复制正文；最多16KiB一段，先按已知对话ID/时间/�
 样本超过5分钟不用于比例判断，last_sample仅为诊断；当前字段是最近请求样本与名义容量，不是精确剩余量或自动压缩阈值。按已核实total-scope阈值可传 --limit N。不修改模型设置绕过压缩。Hook仍45秒节流、同原因unknown去重，不增加模型调用；升级后首次可提示事件提醒当前owner重读Skill。
 
 cost仅在审计/批次结束时按需运行，流式读取指定一个本地transcript的token_count，累计计数去重、排除首样本继承历史，区分缓存/非缓存输入与输出；计数器重置标出可能低估。不自动包括子代理、其他对话或账号额度，不解释价格，不声称净节省。跨对话汇总先按session身份去重，不混入fork继承历史；无可比任务对照则净节省未知。
+
+### 低频阶段提示
+
+1.8.2 复用现有 SessionStart/PostToolUse，随正常事件发现 batch.id 变化或首次观察到未覆盖当前正文的旧决定时，在下一可提示事件给一次“下一安全节点做阶段复核”的内部提示。runtime.stage_review 只保留当前批次、结论摘要及已提示状态；常规保存、用量波动和重复压缩不会重置它。更新短 continuation 结论可确认本阶段已处理，不要求刷新完整 memory_review；同次保存新批次和新结论不再提示。已完成目标、交接预约中及旧 owner 不提示。
+
+沿用45秒 PostToolUse 节流，Stop/PreCompact 等只记状态或回执，不强制产生新一轮；无新增 Hook、轮询、摘要调用或聊天扫描。runtime.continuation_review.due_at_safe_boundary 仍反映完整复核/压缩状态，不能当作反复提示或必须迁移的命令。自然语言 next_check 是否已到达、临时限制是否仍适用须由代理核对；提示不证明复核已经完成。安装不改项目检查点，已有 owner 会在后续可提示事件获知新指导。
 
 ## 一次接棒
 

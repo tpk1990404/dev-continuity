@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.8.2 — 2026-10-16
+
+### Review substantive stages without forcing migration
+
+- Existing SessionStart/PostToolUse Hooks surface a missed stage review once, keyed by stable batch ID. The first observation of a stale legacy decision also gets one prompt. Ordinary note edits, repeated compactions and usage fluctuations do not reset this reminder; Stop never forces another turn. Completed tasks, reserved handoffs and former owners are excluded.
+- Reuse `memory_review.continuation` for a short stage conclusion. Updating it acknowledges the stage without pretending that stale full-review evidence is current. Existing handoff readiness and source/model/effort checks remain unchanged. No new command, schema, Hook registration, polling or model call.
+- Clarify agent responsibility at substantive batch completion, an agreed `next_check`, or a verified recovery problem. Inspect the goal, corrections and unfinished work at a safe boundary; reuse unchanged evidence. Natural-language milestones cannot be detected automatically by this local script.
+- Preserve the source and scope of temporary no-handoff instructions. Revisit relevant conditions, keep ambiguous restrictions in force until clarified, and continue independently authorized work. Do not silently expire restrictions, extrapolate them indefinitely, or notify the user on every review.
+- Four regression scenarios cover stale decisions, ordinary-save/compaction deduplication, short acknowledgements, completed/reserved tasks, and unchanged user constraints/unknown-operation records. Existing model inheritance, source retention and archival regressions remain in the suite. These are isolated tests, not proof of long-term memory completeness or measured net token savings.
+
+### Compatibility and publication
+
+- Includes the locally installed 1.8.1 maintenance changes below, which had not previously been published. Reads schemas 1–7, writes schema 7, and keeps handoff policy 4. Installation updates only selected skill files by default, preserves project checkpoints and does not start a successor. Runtime reminder state is rebuilt lazily by normal Hook events.
+
+## 1.8.1 — 2026-10-13
+
+### Shorter guidance and conservative maintenance
+
+- Keep everyday recovery, source lookup, finite-batch progress and meaningful checkpoint updates in the skill entrypoint. Route detailed archival and handoff procedures to existing references, retaining ownership, actual-setting checks and original-conversation recovery.
+- Clarify that keyword lookup uses substring matching; try relevant keywords and authoritative sources before treating a miss as missing history. No retrieval engine or dependency was added.
+- Document bounded maintenance by the current writer: preserve a verified evidence chain, preview at a safe boundary, archive only confirmed closed operations, and check every affected ID and untouched state. Do not mix initial archival with requirement consolidation, set slimming quotas, or overwrite later progress when recovering.
+- Schema 7, policy 4, command behavior, Hooks configuration and project data remain unchanged. Only the runtime guidance-version marker changes so existing low-frequency Hooks can request a reread. Installation does not archive records. No token-saving percentage is claimed.
+
 ## 1.8.0 — 2026-10-09
 
 ### Recover in place before considering migration
