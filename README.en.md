@@ -8,7 +8,14 @@ dev-continuity is an independent community skill for long development tasks, int
 
 This is not an OpenAI product, infinite memory, a background agent, or a promise of uninterrupted execution.
 
-## What's new in 1.8.2
+## What's new in 1.8.3
+
+- **Separate owner and subagent signals:** Hooks verify the transcript's actual identity before updating state. Subagents cannot overwrite parent usage or consume its stage prompt. Project usage also checks old runtime identity; unknown does not mean spare capacity.
+- **Keep stage conclusions current:** update the short decision at the agreed boundary during normal work; its timestamp records a real review. Recover the complete goal and approved deliverable before following historical next steps.
+- **Reuse valid evidence:** unchanged, valid content reviews can be reused. A migration decision still needs a current reason, restriction check, authorization and available tools; local preparation does not grant external permission.
+- Schema 7, policy 4, commands and model inheritance remain unchanged. No project-data migration, new dependency, scheduler or model call. Isolated regressions do not establish long-term recall or measured net token savings. See [details](CHANGELOG.md#183--2026-10-23).
+
+### What's new in 1.8.2
 
 - **Stage review without reminder loops:** existing Hooks use stable batch IDs to prompt once when a new stage lacks a review. Ordinary saves and repeated compactions do not retrigger it or force conversation creation.
 - **Scoped temporary handoff restrictions:** preserve the original instruction and its scope; revisit at the relevant business boundary. Never automatically revoke it or silently broaden it into a permanent ban. Continue in place when recovery works.

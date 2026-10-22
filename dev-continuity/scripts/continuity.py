@@ -15,7 +15,7 @@ import time
 import uuid
 
 VERSION = 7
-SKILL_VERSION = "1.8.2"
+SKILL_VERSION = "1.8.3"
 MAX_NOTE = 48 * 1024
 TAIL = 256 * 1024
 MAX_USAGE_SCAN = 8 * 1024 * 1024
@@ -637,6 +637,22 @@ def recall(project, task, query="", offset=0, limit=8, history=False, revision=N
     return result
 
 
+def owner_transcript(stream, session):
+    """Only the bounded first metadata record identifies this log, not inherited history."""
+    try:
+        header = json.loads(stream.readline(64 * 1024))
+    except (ValueError, UnicodeError):
+        return False
+    if not isinstance(header, dict) or header.get("type") != "session_meta":
+        return False
+    meta = header.get("payload")
+    if not isinstance(meta, dict) or meta.get("id") != session:
+        return False
+    source = meta.get("source")
+    return (meta.get("thread_source") != "subagent" and source != "subagent"
+            and not (isinstance(source, dict) and "subagent" in source))
+
+
 def resolve_settings(note, directory, session, transcript=None):
     """Resolve once at prepare; never treat missing evidence as a default choice."""
     explicit = note.get("continuation_settings", {})
@@ -652,10 +668,7 @@ def resolve_settings(note, directory, session, transcript=None):
     require(transcript, "cannot inherit settings: current owner transcript unavailable; supply its verified path or repair runtime")
     try:
         with Path(transcript).open("rb") as stream:
-            header = json.loads(stream.readline(64 * 1024))
-            require(isinstance(header, dict) and header.get("type") == "session_meta"
-                    and isinstance(header.get("payload"), dict) and header["payload"].get("id") == session,
-                    "cannot inherit settings: transcript session mismatch")
+            require(owner_transcript(stream, session), "cannot inherit settings: transcript session mismatch")
             stream.seek(0, 2)
             start = max(0, stream.tell() - MAX_USAGE_SCAN)
             stream.seek(start)
@@ -898,8 +911,15 @@ def task_usage(project, task, session, limit=None):
     value, _ = load(root, task)
     require(value["owner"] == identifier(session), "usage requires the current owner")
     path = directory / ("runtime-" + session + ".json")
-    runtime = bounded_json(path) if path.exists() else {}
-    return usage(runtime.get("transcript", {}).get("path"), value["note"].get("compaction_limit") if limit is None else limit)
+    try:
+        runtime = bounded_json(path) if path.exists() else {}
+        transcript = runtime.get("transcript", {}).get("path")
+        with Path(transcript).open("rb") as stream:
+            if not owner_transcript(stream, session):
+                return {"status": "unknown", "reason": "transcript_identity_mismatch"}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {"status": "unknown", "reason": "transcript_unavailable_or_invalid"}
+    return usage(transcript, value["note"].get("compaction_limit") if limit is None else limit)
 
 
 def hook(payload):
@@ -920,12 +940,21 @@ def hook(payload):
     # Old sessions must not keep warning or recording after a successful transfer.
     if value["owner"] != session:
         return {}
+    # Subagent/fork Hooks can share session_id. Never consume the owner's hint or
+    # overwrite its telemetry without an independently matching log identity.
+    transcript = payload.get("transcript_path")
+    try:
+        with Path(transcript).open("rb") as stream:
+            if not owner_transcript(stream, session):
+                return {}
+    except (OSError, ValueError, TypeError):
+        return {}
     runtime_path = directory / ("runtime-" + session + ".json")
     with lock(directory, "hook.lock"):
         runtime = bounded_json(runtime_path) if runtime_path.exists() else {}
         if event == "PostToolUse" and time.time() - runtime.get("checked_at", 0) < 45:
             return {}
-        sample = usage(payload.get("transcript_path"), value["note"].get("compaction_limit"))
+        sample = usage(transcript, value["note"].get("compaction_limit"))
         decision = continuation_review(value["note"])
         decision_key = digest(encode(value["note"].get("memory_review", {}))) if decision["current"] else None
         if decision_key and decision_key != runtime.get("decision_key"):
@@ -937,7 +966,6 @@ def hook(payload):
         runtime["stage_review"] = stage_review(value["note"], runtime.get("stage_review", {}), decision)
         runtime.update(checked_at=time.time(), at=now(), event=event, revision=revision, usage=sample)
         runtime["skill_version"] = SKILL_VERSION
-        transcript = payload.get("transcript_path")
         if transcript:
             try:
                 runtime["transcript"] = {"path": str(Path(transcript).resolve()), "bytes": Path(transcript).stat().st_size}

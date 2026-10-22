@@ -265,8 +265,68 @@ class ContinuityTest(unittest.TestCase):
         path = self.root / "transcript.jsonl"
         value = {"timestamp": stamp or c.now(), "type": "event_msg", "payload": {"type": "token_count", "info": {
             "last_token_usage": {"total_tokens": used}, "total_token_usage": {"total_tokens": 999999}, "model_context_window": 100}}}
-        path.write_text(json.dumps(value) + "\n", encoding="utf-8")
+        header = {"type": "session_meta", "payload": {"id": "old", "thread_source": "agent_created_thread"}}
+        path.write_text(json.dumps(header) + "\n" + json.dumps(value) + "\n", encoding="utf-8")
         return path
+
+    def test_subagent_hook_cannot_consume_parent_stage_review(self):
+        revision = self.saved()
+        parent = self.sample(used=10)
+        payload = {'cwd': str(self.root), 'session_id': 'old', 'hook_event_name': 'PostToolUse',
+                   'transcript_path': str(parent)}
+        c.hook(payload)
+        revision = c.save(self.root, 'task', 'old', {'batch': {**self.note['batch'], 'id': 'acceptance'}},
+                          revision, patch=True)['revision']
+        runtime = self.root / '.dev-continuity/task/runtime-old.json'
+        state = json.loads(runtime.read_text()); state['checked_at'] = 0
+        runtime.write_text(json.dumps(state), encoding='utf-8')
+        before = runtime.read_bytes()
+        child = self.root / 'child.jsonl'
+        child_meta = {'type': 'session_meta', 'payload': {'id': 'child', 'session_id': 'old',
+                      'parent_thread_id': 'old', 'thread_source': 'subagent', 'agent_path': '/root/review'}}
+        # Forked logs can contain a later copy of the parent's header. Only the first identity applies.
+        child.write_text(json.dumps(child_meta) + '\n' + parent.read_text(encoding='utf-8'), encoding='utf-8')
+        self.assertEqual(c.hook({**payload, 'transcript_path': str(child)}), {})
+        self.assertEqual(runtime.read_bytes(), before)
+        result = c.hook(payload)
+        self.assertIn('阶段复核', result['hookSpecificOutput']['additionalContext'])
+        self.assertEqual(c.load(self.root, 'task')[1], revision)
+
+    def test_hook_rejects_missing_or_unknown_identity_without_parent_changes(self):
+        self.saved()
+        parent = self.sample(used=10)
+        runtime = self.root / '.dev-continuity/task/runtime-old.json'
+        before = runtime.read_bytes()
+        candidate = self.root / 'unverified.jsonl'
+        cases = [None, 'not-json\n', json.dumps({'type': 'session_meta', 'payload': None}) + '\n',
+                 json.dumps({'type': 'session_meta', 'payload': {'id': 'different'}}) + '\n',
+                 json.dumps({'type': 'session_meta', 'payload': {'id': 'old', 'thread_source': 'subagent'}}) + '\n',
+                 json.dumps({'type': 'session_meta', 'payload': {'id': 'old', 'source': 'subagent'}}) + '\n',
+                 json.dumps({'type': 'session_meta', 'payload': {'id': 'old', 'source': {'subagent': {'parent_thread_id': 'old'}}}}) + '\n',
+                 json.dumps({'type': 'session_meta', 'payload': {'id': 'child', 'agent_path': '/root/review'}}) + '\n']
+        for index, header in enumerate(cases):
+            with self.subTest(identity=index):
+                if header is not None:
+                    candidate.write_text(header + parent.read_text(encoding='utf-8'), encoding='utf-8')
+                self.assertEqual(c.hook({'cwd': str(self.root), 'session_id': 'old',
+                    'hook_event_name': 'SessionStart', 'transcript_path': str(candidate) if header is not None else None}), {})
+                self.assertEqual(runtime.read_bytes(), before)
+        self.assertFalse(list((self.root / '.dev-continuity/task/events').glob('*.json')))
+
+    def test_task_usage_rejects_legacy_subagent_runtime_path(self):
+        self.saved()
+        parent = self.sample()
+        child = self.root / 'child.jsonl'
+        child.write_text(json.dumps({'type': 'session_meta', 'payload': {
+            'id': 'child', 'session_id': 'old', 'thread_source': 'subagent'}}) + '\n' +
+            parent.read_text(encoding='utf-8'), encoding='utf-8')
+        runtime = self.root / '.dev-continuity/task/runtime-old.json'
+        runtime.write_text(json.dumps({'transcript': {'path': str(child)}}), encoding='utf-8')
+        before = runtime.read_bytes()
+        result = c.task_usage(self.root, 'task', 'old')
+        self.assertEqual(result['status'], 'unknown')
+        self.assertNotIn('remaining_percent_estimate', result)
+        self.assertEqual(runtime.read_bytes(), before)  # Reading cannot rewrite old evidence.
 
     def test_usage_ignores_cumulative_and_rejects_stale_missing(self):
         path = self.sample()
@@ -835,7 +895,7 @@ class ContinuityTest(unittest.TestCase):
             c.task_usage(self.root,'task','another')
         with self.assertRaisesRegex(ValueError,'threshold'):
             c.task_usage(self.root,'task','old',0)
-        second.write_bytes(b'no compatible sample')
+        second.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'old'}}) + '\nno compatible sample', encoding='utf-8')
         runtime = self.root / '.dev-continuity/task/runtime-old.json'
         for expected in [True,False]:
             state = json.loads(runtime.read_text());state['checked_at']=0;runtime.write_text(json.dumps(state))
@@ -860,6 +920,30 @@ class ContinuityTest(unittest.TestCase):
         revision=c.save(self.root,'task','old',{'memory_review':review},revision,patch=True)['revision']
         self.assertTrue(c.verify(self.root,'task')['handoff_ready'])
         self.assertFalse(c.verify(self.root,'task')['new_handoff_ready'])
+
+    def test_unchanged_full_review_can_support_new_local_migration_decision(self):
+        revision = self.saved()
+        value, _ = c.load(self.root, 'task')
+        review = deepcopy(value['note']['memory_review'])
+        complete_evidence = {key: deepcopy(review[key]) for key in ('basis_sha256', 'critical_ids', 'checked_sections')}
+        review['continuation'] = self.decision('defer')
+        revision = c.save(self.root, 'task', 'old', {'memory_review': review}, revision, patch=True)['revision']
+        self.assertFalse(c.verify(self.root, 'task')['new_handoff_ready'])
+        # The agent has checked necessity, tools and current restrictions; unchanged evidence is reused.
+        review['continuation'] = self.decision('migrate')
+        review['continuation']['reason'] = 'Reviewed the current boundary, available tools and user restrictions.'
+        revision = c.save(self.root, 'task', 'old', {'memory_review': review}, revision, patch=True)['revision']
+        value, _ = c.load(self.root, 'task')
+        self.assertEqual({key: value['note']['memory_review'][key] for key in complete_evidence}, complete_evidence)
+        self.assertTrue(c.verify(self.root, 'task')['new_handoff_ready'])
+        revision = c.save(self.root, 'task', 'old', {'next': ['a new unfinished action']}, revision, patch=True)['revision']
+        self.assertFalse(c.verify(self.root, 'task')['new_handoff_ready'])
+        with self.assertRaises(ValueError):
+            c.transfer(self.root, 'task', 'old', revision, 'prepare')
+        revision = c.save(self.root, 'task', 'old', {'next': self.note['next']}, revision, patch=True)['revision']
+        result = c.transfer(self.root, 'task', 'old', revision, 'prepare')
+        self.assertEqual(result['handoff']['phase'], 'REQUESTED')
+        self.assertEqual(c.load(self.root, 'task')[0]['owner'], 'old')  # A local reservation neither creates a chat nor grants external permission.
 
     def test_expired_observation_blocks_handoff_without_erasing_user_constraints(self):
         until=(datetime.now(timezone.utc)+timedelta(minutes=1)).isoformat()
@@ -951,8 +1035,10 @@ class ContinuityTest(unittest.TestCase):
         self.assertFalse(c.verify(self.root, 'task')['new_handoff_ready'])
         state = json.loads((self.root / '.dev-continuity/task/runtime-old.json').read_text())
         self.assertFalse(state['stage_review']['pending'])
-        # Checking the next stage in the same save must not cause a redundant reminder.
+        # A real review of the next stage can be saved with its batch; changing only the timestamp is not a review.
         review['continuation']['at'] = c.now()
+        review['continuation']['reason'] = 'Accepted design and preserved restrictions checked; continue implementation here.'
+        review['continuation']['next_check'] = 'At the implementation acceptance boundary'
         c.save(self.root, 'task', 'old', {'batch': {**self.note['batch'], 'id': 'implementation'},
                                         'memory_review': review}, revision, patch=True)
         self.assertEqual(self.stage_event(), {})
@@ -980,7 +1066,7 @@ class ContinuityTest(unittest.TestCase):
         self.assertNotIn('阶段复核', str(result))
         revision = c.save(self.root, 'task', 'old', {'completed': False, 'next': ['continue']}, revision, patch=True)['revision']
         revision = self.review('old', revision)
-        self.runtime('old')  # Restore the identity-bearing settings log after usage-only fixtures.
+        self.runtime('old')  # Restore the settings-bearing log after usage fixtures.
         revision = c.transfer(self.root, 'task', 'old', revision, 'prepare')['revision']
         self.assertNotIn('阶段复核', str(self.stage_event()))
         self.assertEqual(c.load(self.root, 'task')[1], revision)

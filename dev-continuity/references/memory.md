@@ -107,9 +107,9 @@ operation --id 仍返回完整失败与历史标记，核对回执摘要并通�
 
 实质批次结束、约定的 next_check 到达或已确认恢复异常时，把复核并入正常收尾：对照完整需求入口和本阶段新增纠正，确认未完成、验证边界及不可重放事项仍可恢复，再决定原对话继续、暂缓迁移或确需交接。同版本证据复用；不逐次压缩重审，不按聊天长度、天数或压缩次数决定迁移。
 
-原对话继续或迁移暂缓时，复用 memory_review.continuation 的 decision/tools/reason/next_check/at，只在理由或复核点实质变化时更新短结论。reason 写具体依据，next_check 写可观察的业务节点；例如“原文和未完成均可恢复，等待本候选验收；验收后实施前核对”。不要只写“以后再看”或把 next_check 自动改成每次保存。工具未核实填 unknown，不为一次 defer 额外探测全部工具。
+原对话继续或迁移暂缓时，复用 memory_review.continuation 的 decision/tools/reason/next_check/at。在约定节点实际核对后同步短结论，其他时候仅在理由或复核点实质变化时更新。reason 写当前进度、未完成和继续方式的具体依据，next_check 写可观察的业务节点；例如“本候选已验收，未完成项与原文可恢复，原对话继续已授权接入；接入收口后核对”。at 表示本次确实做过核对，不能只刷新时间消除提醒，也不声称重读了未读内容。不要只写“以后再看”或把 next_check 自动改成每次保存。工具未核实填 unknown，不为一次 defer 额外探测全部工具。
 
-save --patch 是字段级合并：更新时保留当前 memory_review 其他成员，仅替换 continuation；没有旧对象则只保存 continuation。不能为让旧声明看起来有效而刷新 basis_sha256/critical_ids/checked_sections。短结论不是完整语义审计或迁移许可；真正 prepare 仍要求下节整套复核。
+save --patch 是字段级合并：更新时保留当前 memory_review 其他成员，仅替换 continuation；没有旧对象则只保存 continuation。不能为让旧声明看起来有效而刷新 basis_sha256/critical_ids/checked_sections。短结论不能代替缺失或失效的完整语义审计；若同版本正文审计仍有效，可复用该证据并更新迁移决定。真正 prepare 仍须满足下节全部条件，本地预约不是外部授权。
 
 临时“不接棒”用现有用户记录保存原话、来源、适用范围，并在 reason 引用其 ID、在 next_check 写相关节点。若旧记录混合了多项要求，先查原文，不能因一句“暂时”归并掉其他仍有效内容。明确的条件式限制按原条件判断，用户明确解除则按原格式追加替代记录；范围含糊且确需迁移时保留限制并向用户澄清一次。阶段变化只是复核信号，不是解除权限，也不默认变成所有后续阶段的永久禁令。仅暂停依赖迁移的动作，继续原对话中独立已授权工作。
 
@@ -125,7 +125,7 @@ save --patch 是字段级合并：更新时保留当前 memory_review 其他成�
 {"memory_review":{"basis_sha256":"实际值","critical_ids":["实际关键ID"],"checked_sections":["goal","progress","decisions","evidence","next"],"continuation":{"decision":"migrate","tools":"available","reason":"原对话出现已核实的恢复问题，必要原文已补齐，迁移有助于继续；本步安全结束、下一步已授权且接续工具可用","next_check":"接棒取得实质进展后","at":"实际复核时间，带时区"}}}
 ```
 
-真正准备交接时，完成内容核对、取得basis/critical_ids并保存复核声明；prepare内部重新verify，不必再跑一遍相同验证。日常 save --patch 可保留失效的旧 memory_review，原对话继续不要求刷新它。decision 为 migrate/defer/unavailable，tools 为 available/unavailable/unknown；reason/next_check各1—500字符，at为真实带时区时间。工具能力须实际查询，不是写available就获得能力或授权。实际迁移问题待解决时defer给复核节点，unavailable给能力变化条件。正文变化使交接复核失效；新压缩要求核对记忆，但恢复正常无需重写迁移声明。来源/依赖/归档变化仍阻止交接。
+真正准备交接时，完整复核声明须与当前正文匹配；已有同版本有效审计可以复用，否则完成内容核对、取得basis/critical_ids并保存。仅将 defer 改为 migrate，也须实际核对迁移必要性、当前限制、下一步授权和工具可用性；不能把旧审计冒充刚做的全文重读。prepare内部重新verify，不必再跑一遍相同验证。日常 save --patch 可保留失效的旧 memory_review，原对话继续不要求刷新它。decision 为 migrate/defer/unavailable，tools 为 available/unavailable/unknown；reason/next_check各1—500字符，at为真实带时区时间。工具能力须实际查询，不是写available就获得能力或授权。实际迁移问题待解决时defer给复核节点，unavailable给能力变化条件。正文变化使交接复核失效；新压缩要求核对记忆，但恢复正常无需重写迁移声明。来源/依赖/归档变化仍按原校验阻止无效交接。
 
 handoff_ready 保留旧策略的机械复核含义；semantic_review_current 表示本正文五字段已确认核对；continuation_review显示迁移决定是否对应当前正文；new_handoff_ready 才表示符合1.5新建预约条件。四者都不证明自然语言语义完整，不是外部权限。
 

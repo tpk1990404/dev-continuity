@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.8.3 — 2026-10-23
+
+### Keep subagent events out of owner state
+
+- Verify the first transcript identity before Hooks update runtime state. A shared parent session ID, filename or inherited later parent metadata cannot identify a child transcript as the owner. Reject unrelated or unverifiable logs while retaining support for valid owner log segments.
+- Child events cannot replace the parent's transcript pointer or usage, advance its throttle, or consume its one-time stage prompt. Project-based usage also validates the stored transcript, so an older polluted runtime cannot silently supply the parent's capacity. Preserve existing records and wait for a valid owner event instead of rewriting history.
+- Keep the existing actual model/effort checks and frozen reservations. No default model selection or setting adjustment is introduced.
+
+### Clarify review and evidence reuse
+
+- At an agreed `next_check`, update the short continuation conclusion as part of normal work. Its `at` means a real review occurred; refreshing a timestamp alone is not a review. No new milestone parser, periodic reminder or workflow field.
+- Clarify that an unchanged, valid full content review may be reused when changing the continuation decision. A new migrate decision still requires a current reason and checks of restrictions, next-step authorization and tools. It cannot replace a missing/stale content review or grant external permission through local `prepare`.
+- Recover the complete goal and approved deliverable from the current authoritative entry before using a historical next step. This is a clarification of existing scope rules, not another project ledger or per-turn checklist.
+
+### Compatibility and validation scope
+
+- Reads schemas 1–7, writes schema 7 and retains policy 4, existing commands and frozen handoff checks. Installation does not migrate project checkpoints, clear history or change model settings. No new dependency, scheduler, Hook registration or model call.
+- Regression coverage targets shared-session child logs, inherited metadata, valid owner segments, polluted runtime reads and valid-evidence reuse. These isolated checks do not establish live parent-prompt delivery, long-term semantic completeness or net token savings.
+
 ## 1.8.2 — 2026-10-16
 
 ### Review substantive stages without forcing migration

@@ -54,7 +54,9 @@ py -3 -X utf8 SCRIPT cost --transcript TRANSCRIPT.jsonl
 
 anchor 默认不复制正文；最多16KiB一段，先按已知对话ID/时间/关键词定位。可变原文用 save --retain-sources 或 source --project PROJECT --input ANCHOR.json --retain 保留小片段，详见记忆格式。source --project 可查保留片段；--show会输出正文，只对已确认非敏感片段使用。会话格式非稳定契约，不能承诺找回未保留且已删除的原文。
 
-`usage` 优先从当前owner的runtime解析最新transcript.path，避免固定旧日志分段；也可显式指定一个路径，两种模式不可混用。默认先查末尾256 KiB，未找到时按倍增窗口向前，最大尾部范围8 MiB（最坏累计读取不足16 MiB），跳过大工具/图片行。仅解析token_count的小事件；不把大图片读入模型上下文。超过边界返回scan_limit，过期返回stale_or_future_sample，无兼容事件/文件分别说明原因。unknown不是余量充足。
+`usage` 优先从当前owner的runtime解析最新transcript.path，核实日志身份后读取，避免固定旧日志分段或沿用被子代理污染的样本；也可显式指定一个路径，两种模式不可混用。默认先查末尾256 KiB，未找到时按倍增窗口向前，最大尾部范围8 MiB（最坏累计读取不足16 MiB），跳过大工具/图片行。仅解析token_count的小事件；不把大图片读入模型上下文。超过边界返回scan_limit，过期返回stale_or_future_sample，无兼容事件/文件分别说明原因。unknown不是余量充足。
+
+1.8.3 在 Hook 更新状态前核对日志首条身份（最多64 KiB，超限视为未知）：共享 session_id、文件名及子日志中继承的后续父记录均不能代替当前负责人身份。子代理事件不改父 runtime、日志指针、节流状态或阶段提示；合法负责人日志分段继续使用。未知/不匹配日志不能提供父容量依据；旧污染 runtime 保留原件，等待有效父事件更新，不改写历史或项目检查点。日志格式不是稳定接口，变化时须重新核验。
 
 样本超过5分钟不用于比例判断，last_sample仅为诊断；当前字段是最近请求样本与名义容量，不是精确剩余量或自动压缩阈值。按已核实total-scope阈值可传 --limit N。不修改模型设置绕过压缩。Hook仍45秒节流、同原因unknown去重，不增加模型调用；升级后首次可提示事件提醒当前owner重读Skill。
 
@@ -70,7 +72,7 @@ cost仅在审计/批次结束时按需运行，流式读取指定一个本地tra
 
 只有用户明确要求或有效的个人约定已授权自动接续同一目标时创建任务；无此授权交付 prompt 文件即可。Skill 自身不提供创建任务或外部操作的授权；项目与工具的更高优先级边界继续适用。
 
-1. 先确认迁移确有必要；原对话压缩后恢复正常、仅有下一批或达到比例，不构成必须迁移。完成当前安全步骤，核对创建、投递及等待工具和既有授权；按记忆格式保存五字段复核与migrate理由。`transfer --action prepare` 内部verify并要求 new_handoff_ready=true，然后生成 `handoff-prompt.md` 及唯一预约；不必在各阶段前后重复完整verify。重复 prepare 拒绝。新 prepare 要求有限batch、有效关键来源、容量余量及与当前正文匹配的memory_review；ok=true或旧handoff_ready=true单独不足。未知操作须在语义核验时确认已停止写入、结果如何查询；不以迁移触发重放。
+1. 先确认迁移确有必要；原对话压缩后恢复正常、仅有下一批或达到比例，不构成必须迁移。完成当前安全步骤，核对当前限制、创建/投递/等待工具和既有授权；按记忆格式保存migrate理由，五字段同版本有效复核可复用。`transfer --action prepare` 内部verify并要求 new_handoff_ready=true，然后生成 `handoff-prompt.md` 及唯一预约；不必在各阶段前后重复完整verify。本地预约不授予外部权限，重复 prepare 拒绝。新 prepare 要求有限batch、有效关键来源、容量余量及与当前正文匹配的memory_review；ok=true或旧handoff_ready=true单独不足。未知操作须在语义核验时确认已停止写入、结果如何查询；不以迁移触发重放。
 2. 用已有 create_thread：先 list_projects，遵守worktree/local规则、目录及设置继承授权。传递prepare返回的continuation_settings，不能直接传note历史字段。默认从当前owner的runtime.transcript.path读取最近同一条turn_context.model/effort，校验session_meta身份，最多读取尾部8 MiB；未登记路径时 prepare 可加 --transcript REAL_LOG。缺文件、身份不符、字段/格式未知或超界未找到均在预约前失败，不回退旧值。仅 for_session 对应当前owner的调整生效：部分调整继承另一项，完整指定或明确恢复默认可用用户依据；不支持的设置不能自动替换。handoff冻结值不在后续阶段重算；旧预约按原值完成。提示词携带短入口、request_id、批次及来源，要求先只读核对；未释放则READY并等旧任务消息，不fork整段聊天。
 3. 调用返回真实 threadId 后 `transfer --action target --successor ID`。只有 clientThreadId 时等待解析；回执不明先查创建结果，禁止再次 create。失败记录保留，不自动清除预约。
 4. 确认旧任务代码/外部操作已停且现场仍匹配，`transfer --action release`；之后旧任务仅查询回执和发送交接消息，不再写本任务文件。用 `send_message_to_thread` 将 `request_id`、真实 successor ID、RELEASED revision 和无在途写入的说明发给刚创建的任务，明确“核验后 accept，立即继续，不等待用户回复”。消息失败先查投递/运行结果，不自动重复释放或创建。
@@ -83,7 +85,7 @@ cost仅在审计/批次结束时按需运行，流式读取指定一个本地tra
 
 70%提示保存，80%、新压缩及批次切换提示下一安全节点核对记忆；均不要求新建对话或重写迁移声明。恢复完整就原对话继续，缺信息先查原文。仅用户要求迁移、宿主不能可靠续跑，或已有具体恢复问题且迁移确有帮助时启动以上流程，仍须独立授权next、工具、来源复核及无未决创建。实际问题暂不能解决时记录defer/unavailable与复核节点；原对话正常继续不是违规暂缓。用户暂不接棒、已结束或无独立next时不创建。
 
-Hook的due_at_safe_boundary表示记忆核对提醒，不是迁移义务。semantic_review_current=false阻止新交接，不阻止原owner保存并继续；准备迁移时再生成与当前正文匹配的复核。Hooks不执行调度、工具创建或语义复核，不能把对话数量当作连续性指标。优先完成一次可验证业务闭环，减少只完成检查点维护就迁移的情况。
+Hook的due_at_safe_boundary表示记忆核对提醒，不是迁移义务。semantic_review_current=false阻止新交接，不阻止原owner保存并继续；准备迁移时须有与当前正文匹配的有效复核。Hooks不执行调度、工具创建或语义复核，不能把对话数量当作连续性指标。优先完成一次可验证业务闭环，减少只完成检查点维护就迁移的情况。
 
 只有查询确认创建失败，或已创建的 successor 明确停止且未接手后，旧 owner 才可保存脱敏查询回执并执行 `transfer --action cancel --cancel-receipt PROJECT_RELATIVE_RECEIPT`。脚本保存回执哈希与原预约；取消后可恢复旧任务。回执不明不可取消预约，不通过取消规避重复创建检查。
 

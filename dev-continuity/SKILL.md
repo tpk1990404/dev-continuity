@@ -2,7 +2,7 @@
 name: dev-continuity
 description: Maintain resumable development checkpoints, trace decisions to source records, and transfer unfinished work across conversations. Use for long development tasks, context pressure, interruption recovery, or handoff; skip routine one-step edits and unrelated questions.
 metadata:
-  version: "1.8.2"
+  version: "1.8.3"
 ---
 
 # 开发连续性
@@ -13,7 +13,7 @@ metadata:
 
 ## 日常恢复与推进
 
-1. 用 scripts/continuity.py recall，固定 revision 读完当前关键项：完整目标、批次、决定及理由、验证边界、禁止事项、未完成操作和 next。同 revision 不重复加载；跨压缩不假定旧阅读仍在上下文。
+1. 用 scripts/continuity.py recall，固定 revision 读完当前关键项：完整目标、批次、决定及理由、验证边界、禁止事项、未完成操作和 next。先按当前权威入口确认完整目标及批准交付物，再用历史 next；它不授予新权限。同 revision 不重复加载；跨压缩不假定旧阅读仍在上下文。
 2. 按模块用 recall --query，旧决定用 --history --query；record --id 查一条，--source-index N 取一个已核对非敏感原文片段。查询是子串匹配，优先 ID 或关键词；未命中先换相关关键词、查权威文档及必要原文，再判断是否缺依据，不能直接说“用户未做/规则未定”。冲突核对较新指示和当前现场。外部操作前用 operation --id 查当前与历史；未找到不授予权限。
 3. 按已授权有限批次推进，batch 写范围和完成条件，next 对应缺口。有独立且已授权下一步就继续；人工、费用或新业务决定只暂停依赖动作。用户停止优先，不新增目标或无限找缺陷。
 4. 重要要求/纠正、取舍、完成/失败、阻塞或 next 实质变化后及时 save --patch；中断后在下一安全节点补齐，不等交接、不逐轮重存。同步核对 goal/progress/decisions/evidence/next，过时现状退出当前、历史保留。日常保存不刷新整套 memory_review；verify 用于必要审计或定位问题。
@@ -32,10 +32,10 @@ critical 是本次恢复必读，含完整需求入口、权限、禁止、未�
 
 70%提示保存；80%或新压缩提示核对记忆，均不要求换对话。实质批次结束、约定 next_check 到达或已确认恢复异常时，在安全节点顺带复核原目标、用户纠正、未完成及继续方式；普通保存和重复压缩不逐次重审。实质批次切换更新 batch.id，不逐轮换 ID。能完整恢复就继续，缺信息先检索；换对话不能修复缺失原文。
 
-理由或下一复核点变化时，更新已有 memory_review.continuation，按[阶段复核](references/memory.md#阶段复核)保存短结论，无需重做整套交接审计。只有影响继续方式或需要澄清时才向用户简述，不固定提醒。“暂不接棒”保留原话与适用范围；到相关节点查后续指示，不擅自扩大成永久限制，也不按时间或压缩次数自动解除。范围不清且确需迁移时一次澄清，独立已授权工作继续。
+约定节点实际复核后，或理由/复核点变化时，同步已有 memory_review.continuation，按[阶段复核](references/memory.md#阶段复核)保存短结论；at 是真实核对时间，不能只刷时间消除提醒。同版本有效审计可复用。只有影响继续方式或需要澄清时才向用户简述，不固定提醒。“暂不接棒”保留原话与适用范围；到相关节点查后续指示，不擅自扩大成永久限制，也不按时间或压缩次数自动解除。范围不清且确需迁移时一次澄清，独立已授权工作继续。
 
 仅用户要求、宿主不能可靠续跑，或具体恢复问题且迁移有帮助时交接。先读[操作参考](references/operations.md)的“一次接棒”，按既有预约一次 → 记录真实新任务 → 释放旧写入权 → 接棒执行 next。适用的暂不接棒限制未解除、目标完成或无独立 next 时不创建；结果未知先查，不重复创建或并发写入。继承当前 owner 最新同一条实际 turn_context 的 model/effort，prepare 冻结；有用户依据的调整绑定来源 owner。accept 核验实际设置，不符或未知保持只读并重试同一预约，旧预约保留原策略。
 
-Python 3.11+ 标准库；Windows 用 py -3 -X utf8。首次使用保存命令、用量观察或安装时按需读[操作参考](references/operations.md)。usage 跟随当前会话日志，unknown 不猜比例或推定迁移，不用 API 名义窗口代替客户端容量。Hooks 只低频记录状态与短提示，不生成摘要、增加模型调用、轮询或强制续跑；工具缺失保留短交接正文，不伪造成功或承诺应用退出后续跑。
+Python 3.11+ 标准库；Windows 用 py -3 -X utf8。首次使用保存命令、用量观察或安装时按需读[操作参考](references/operations.md)。usage 跟随身份核实的当前负责人日志，子代理不更新父对话状态；unknown 不猜比例或推定迁移，不用 API 名义窗口代替客户端容量。Hooks 只低频记录状态与短提示，不生成摘要、增加模型调用、轮询或强制续跑；工具缺失保留短交接正文，不伪造成功或承诺应用退出后续跑。
 
 评价看遗漏、重复操作、恢复后的业务进展与维护开销；实测和模拟分开，字节及累计用量不能证明 token 净节省。
