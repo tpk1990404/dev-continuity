@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.0 — 2026-11-04
+
+- Count the 48 KiB note budget using compact UTF-8 JSON. Do not change snapshot serialization, digests, the physical 96 KiB ceiling, or the 80% and 95% handoff gates. Report which meter applies.
+- Read formats 1–8. Keep format 7 until a save needs additional capacity or a new reservation would fail v1.8.3's 80% reason or 95% reserve check. Publish format 8 with that state, and keep it until explicit conversion. The v1.8.3 loader refuses format 8 before it can advance ownership or change the head.
+- Finish pending legacy reservations with their original capacity rules, request ID, target, policy and actual-setting checks. Installation neither reserves a new chat nor migrates an existing checkpoint.
+- Add owner/revision-checked `export-v7` with a non-publishing preview. It validates current data, all reachable archive versions, historical sources (including note-level anchors) and retired failure receipts. Successful conversion preserves the current note, owner and frozen handoff in a new revision linked to the source revision; it never resets the pointer to earlier work.
+- Integrate actual v1.8.3 interoperability tests into the existing CI matrix. No new runtime dependencies, periodic checks or model calls. Simulated handoffs and bytes saved are not proof of uninterrupted host execution or net token savings.
+
 ## 1.8.3 — 2026-10-23
 
 ### Keep subagent events out of owner state

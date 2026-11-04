@@ -77,7 +77,7 @@ py -3 -X utf8 SCRIPT save --project PROJECT --task TASK --session SESSION --expe
 py -3 -X utf8 SCRIPT save --project PROJECT --task TASK --session SESSION --expected REV --input DELTA.json --patch --archive-superseded --archive-completed
 ```
 
-容量紧张、迁移或批量整理时先 dry-run，不必每次预检。verify 返回 capacity 与可归档数量；save 超限返回字段体积。当前正文仍限 48 KiB；冷快照至多 96 KiB，过大批次拆分。
+容量紧张、迁移或批量整理时先 dry-run，不必每次预检。verify 返回 capacity 的计量口径和可归档数量；save 预演显示目标格式。当前正文限 48 KiB，按无排版空白的 UTF-8 JSON 计量；实际单个快照仍至多 96 KiB，哈希和原文编码保持。旧格式的在途预约按原计量核验。
 
 --archive-superseded 移出已替代/已退役记录；--archive-completed 仅移出 SUCCEEDED 操作。FAILED 默认保持当前；STARTED_UNKNOWN、NOT_STARTED 必须保持当前。归档操作仍按 ID 检查，禁止重置；完全相同的重存保持幂等。原 ID 不复用，不以新 ID 绕过单次许可。
 
@@ -141,4 +141,4 @@ source --project PROJECT --input ANCHOR.json --retain 可显式保存某段。�
 
 verify --history 按需审计历史原文，单独返回 history.ok，历史失配也返回非零退出码；当前 ok 与历史原文完整性不能混称。普通 verify 不重复扫描历史原文内容。
 
-1.8读取schema 1–7，新保存和交接写schema7，防止旧脚本忽略已退役失败的ID保护；新预约仍为policy4，接受前核验实际设置。for_session绑定来源owner，创建参数不含元数据。旧policy1/2/3/4预约保留冻结值与原检查，安装不改项目检查点，无需批量迁移。写过schema7的任务须用兼容版本继续；安装回滚不等于数据回滚，不能回退指针掩盖进展或已执行操作。
+1.9 读取格式1–8；普通兼容写入仍用7。首次保存超过旧正文上限，或首次准备只有新计量允许的预约时，才与该次修订一起写8。格式8不会因正文变小自动降级，v1.8.3拒绝读写最新格式8。既有预约保留原策略、编号、设置和核验；安装不会迁移项目数据。恢复兼容程序即可从最新状态继续；若必须交由 v1.8.3 写入，见[安全导出](operations.md#安全导出给-v183)。

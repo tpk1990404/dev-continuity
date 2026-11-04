@@ -972,7 +972,7 @@ class ContinuityTest(unittest.TestCase):
         for action in ['target','release','accept']:
             revision=c.transfer(self.root,'task','new' if action=='accept' else 'old',revision,action,successor='new')['revision']
         value,_=c.load(self.root,'task')
-        self.assertEqual(value['version'],c.VERSION)
+        self.assertEqual(value['version'],7)  # The legacy reservation stays readable by v1.8.3.
         self.assertEqual(value['owner'],'new')
         self.assertEqual(value['handoff']['phase'],'ACCEPTED')
 

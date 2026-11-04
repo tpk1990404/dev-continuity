@@ -19,6 +19,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          fetch-depth: 0  # The interoperability tests run the pinned v1.8.3 reader/writer.
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
@@ -26,5 +27,7 @@ jobs:
         run: python -X utf8 -B -m unittest discover -s dev-continuity/scripts -p test_continuity.py
       - name: Installer isolation and rollback
         run: python -X utf8 -B -m unittest discover -s . -p test_install.py
+      - name: Actual v1.8.3 interoperability
+        run: python -X utf8 -B -m unittest test_compat
       - name: Offline example
         run: python -X utf8 -B examples/demo.py

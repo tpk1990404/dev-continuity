@@ -14,8 +14,9 @@ import tempfile
 import time
 import uuid
 
-VERSION = 7
-SKILL_VERSION = "1.8.3"
+LEGACY_VERSION = 7  # Highest format understood by v1.8.3.
+VERSION = 8
+SKILL_VERSION = "1.9.0"
 MAX_NOTE = 48 * 1024
 TAIL = 256 * 1024
 MAX_USAGE_SCAN = 8 * 1024 * 1024
@@ -104,7 +105,8 @@ def load(project, task, revision=None):
         raw = stream.read(MAX_NOTE * 2 + 1)
     require(len(raw) <= MAX_NOTE * 2 and digest(raw) == revision, "checkpoint hash mismatch; keep previous snapshots")
     value = json.loads(raw)
-    require(value["version"] in {1, 2, 3, 4, 5, 6, VERSION} and value["project"] == str(root) and value["task"] == task, "checkpoint belongs to another project/task/version")
+    require(type(value.get("version")) is int and 1 <= value["version"] <= VERSION
+            and value["project"] == str(root) and value["task"] == task, "checkpoint belongs to another project/task/version")
     require(not current or not value.get("archive_only"), "archive snapshot cannot be the current checkpoint")
     return value, revision
 
@@ -172,7 +174,7 @@ def stage_review(note, previous, decision):
     return previous
 
 
-def archived_notes(root, task, note):
+def archived_notes(root, task, note, max_version=VERSION):
     """Walk immutable evidence locally; a single head replaces growing hot indexes."""
     pending = list(note.get("record_archives", []))
     if note.get("archive_head"):
@@ -184,6 +186,7 @@ def archived_notes(root, task, note):
             continue
         seen.add(revision)
         value, _ = load(root, task, revision)
+        require(value["version"] <= max_version, "archive requires a newer format; keep the compatible program and current revision")
         yield revision, value["note"]
         pending.extend(value["note"].get("record_archives", []))
         if value["note"].get("archive_head"):
@@ -223,9 +226,22 @@ def operation(project, task, key):
     return lookup(project, task, key, "operations")
 
 
-def capacity(note):
-    return {"note_bytes": len(encode(note)), "limit_bytes": MAX_NOTE,
-            "field_bytes": {k: len(encode(v)) for k, v in note.items()},
+def note_bytes(value, legacy=False):
+    if legacy:
+        return len(encode(value))
+    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def within_handoff_limits(size, note):
+    reason = note.get("memory_review", {}).get("capacity_reason")
+    return size <= MAX_NOTE * .95 and (size <= MAX_NOTE * .8 or
+            isinstance(reason, str) and 0 < len(reason.strip()) <= 500)
+
+
+def capacity(note, legacy=False):
+    return {"note_bytes": note_bytes(note, legacy), "limit_bytes": MAX_NOTE,
+            "basis": "v1.8.3" if legacy else "compact_utf8",
+            "field_bytes": {k: note_bytes(v, legacy) for k, v in note.items()},
             "archivable_records": sum(not is_current(r) for r in note.get("records", [])),
             "archivable_operations": sum(op["state"] == "SUCCEEDED" for op in note.get("operations", []))}
 
@@ -249,8 +265,8 @@ def file_hash(root, relative):
 
 def validate_note(note):
     require(isinstance(note, dict), "note must be an object")
-    require(len(encode(note)) <= MAX_NOTE,
-            "note exceeds capacity; archive settled evidence, preserve constraints: " + json.dumps(capacity(note)))
+    if note_bytes(note) > MAX_NOTE:
+        raise ValueError("note exceeds capacity; archive settled evidence, preserve constraints: " + json.dumps(capacity(note)))
     require(isinstance(note.get("goal"), str) and note["goal"].strip(), "goal required")
     for key in ("acceptance", "decisions", "preserve", "operations", "evidence", "next", "blockers", "files", "sources"):
         require(isinstance(note.get(key), list), key + " must be a list")
@@ -492,13 +508,18 @@ def save(project, task, session, note, expected, patch=False, archive_superseded
                 raw = read_source(anchor, root)
                 check_public_source(anchor, raw)
                 retained[anchor["sha256"]] = raw
-        value = {"version": VERSION, "project": str(root), "task": task, "owner": session,
+        # Keep a v1.8.3-readable head until the write actually needs compact capacity.
+        # Once promoted, only explicit forward conversion may lower the format.
+        version = max(LEGACY_VERSION, old.get("version", LEGACY_VERSION),
+                      VERSION if note_bytes(note, legacy=True) > MAX_NOTE else LEGACY_VERSION)
+        value = {"version": version, "project": str(root), "task": task, "owner": session,
                  "updated": now(), "note": note, "files": fingerprints, "handoff": old["handoff"]}
+        require(len(encode(value)) <= MAX_NOTE * 2, "checkpoint too large; move detail to referenced evidence")
         if cold is not None:
             require(len(encode({**value, "note": cold, "archive_only": True})) <= MAX_NOTE * 2,
                     "archive batch too large; split the evidence update")
         if dry_run:
-            return {"dry_run": True, "expected": expected, "capacity": capacity(note), "retired_records": len(retire),
+            return {"dry_run": True, "expected": expected, "version": version, "capacity": capacity(note), "retired_records": len(retire),
                     "retired_operations": len(retired_ids), "retained_sources": len(retained)}
         for sha, raw in retained.items():
             retain_bytes(root, sha, raw)
@@ -507,8 +528,9 @@ def save(project, task, session, note, expected, patch=False, archive_superseded
             note["archive_head"] = snapshot(directory, {**value, "note": cold, "archive_only": True})
         bind(root, task, session)
         revision = publish(directory, value)
-    return {"revision": revision, "task": task, "note_bytes": len(encode(note)),
-            "capacity_warning": len(encode(note)) > MAX_NOTE * 0.8}
+    size = note_bytes(note)
+    return {"revision": revision, "task": task, "version": version, "note_bytes": size,
+            "capacity_warning": size > MAX_NOTE * 0.8}
 
 
 def verify(project, task, history=False):
@@ -553,16 +575,17 @@ def verify(project, task, history=False):
     review = value["note"].get("memory_review", {})
     reviewed = (isinstance(review, dict) and review.get("basis_sha256") == basis
                 and review.get("critical_ids") == sorted(critical))
-    if len(encode(value["note"])) > MAX_NOTE * 0.8:
+    legacy = (value["version"] <= LEGACY_VERSION and
+              value["handoff"]["phase"] in {"REQUESTED", "TARGET_RECORDED", "RELEASED"})
+    metrics = capacity(value["note"], legacy)
+    if metrics["note_bytes"] > MAX_NOTE * 0.8:
         advisory.append({"maintenance": "consolidate current records before another handoff; preserve original constraints"})
     active = [r for r in value["note"].get("records", []) if is_current(r)]
     if len(active) >= 8 and all(r["critical"] for r in active):
         advisory.append({"maintenance": "all current records are critical; review settled evidence and temporary states"})
     semantic = reviewed and review.get("checked_sections") == REVIEW_SECTIONS
     decision = continuation_review(value["note"])
-    capacity_reason = review.get("capacity_reason", "")
-    capacity_ready = len(encode(value["note"])) <= MAX_NOTE * 0.8 or (
-        isinstance(capacity_reason, str) and 0 < len(capacity_reason.strip()) <= 500)
+    capacity_ready = within_handoff_limits(metrics["note_bytes"], value["note"])
     result = {"ok": not issues, "revision": revision, "issues": issues, "advisory": advisory,
             "memory_basis_sha256": basis, "critical_ids": sorted(critical),
             "review_current": reviewed, "handoff_ready": not issues and reviewed and bool(critical),
@@ -570,24 +593,25 @@ def verify(project, task, history=False):
             "new_handoff_ready": not issues and semantic and bool(critical) and decision["current"]
                 and bool(value["note"].get("batch")) and not value["note"].get("completed")
                 and decision["decision"]["decision"] == "migrate" and decision["decision"]["tools"] == "available"
-                and capacity_ready and len(encode(value["note"])) <= MAX_NOTE * 0.95,
-            "capacity": capacity(value["note"]),
+                and capacity_ready,
+            "version": value["version"], "capacity": metrics,
             "continuation_settings": {k: v for k, v in value["note"].get("continuation_settings", {}).items() if k in {"model", "thinking"}},
             "batch": value["note"].get("batch"),
             "review_scope": "source coverage acknowledgement; compare status changes, duplicate statements and original intent"}
     if history:
         failures, seen = [], set()
         for rev, note in archived_notes(project, task, value["note"]):
-            for record in note.get("records", []):
-                for anchor in record.get("sources", []):
-                    key = (anchor.get("path"), anchor.get("offset"), anchor.get("sha256"))
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    try:
-                        read_source(anchor, project)
-                    except (OSError, ValueError, KeyError, TypeError):
-                        failures.append({"record": record["id"], "source": anchor.get("path"), "revision": rev})
+            anchors = chain(((None, a) for a in note.get("sources", [])),
+                            ((r["id"], a) for r in note.get("records", []) for a in r.get("sources", [])))
+            for record_id, anchor in anchors:
+                key = (anchor.get("path"), anchor.get("offset"), anchor.get("length"), anchor.get("sha256"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    read_source(anchor, project)
+                except (OSError, ValueError, KeyError, TypeError):
+                    failures.append({"record": record_id, "source": anchor.get("path"), "revision": rev})
         result["history"] = {"sources_checked": len(seen), "ok": not failures, "issues": failures}
     return result
 
@@ -713,15 +737,20 @@ def transfer(project, task, session, expected, action, successor=None, cancel_re
             check = verify(root, task)
             require(check["handoff_ready"], "resolve sources and acknowledge current memory review before handoff")
             require(value["note"].get("batch"), "name a finite authorized batch and its completion condition before handoff")
-            require(len(encode(value["note"])) <= MAX_NOTE * 0.95,
+            size = check["capacity"]["note_bytes"]
+            require(size <= MAX_NOTE * 0.95,
                     "leave at least 5% note capacity for successor updates; consolidate without truncating constraints")
-            if len(encode(value["note"])) > MAX_NOTE * 0.8:
+            if size > MAX_NOTE * 0.8:
                 reason = value["note"].get("memory_review", {}).get("capacity_reason")
                 require(isinstance(reason, str) and 0 < len(reason.strip()) <= 500,
                         "consolidate current memory or record why remaining essential constraints require this capacity")
             require(check["new_handoff_ready"],
                     "review goal/progress/decisions/evidence/next and record a current migrate decision with available host tools")
             settings, settings_source = resolve_settings(value["note"], directory, session, transcript)
+            # Fence an old worker before a compact-only reservation becomes visible,
+            # including the 80% exception rule even when the note still fits 48 KiB.
+            if not within_handoff_limits(note_bytes(value["note"], legacy=True), value["note"]):
+                value["version"] = VERSION
             handoff = {"phase": "REQUESTED", "request_id": str(uuid.uuid4()), "from": session, "memory_policy": 4,
                        "continuation_settings": settings, "settings_source": settings_source}
             text = (f"继续已授权的同一开发目标：{value['note']['goal']}\n"
@@ -768,7 +797,7 @@ def transfer(project, task, session, expected, action, successor=None, cancel_re
             handoff.update(phase="CANCELLED", cancellation={"path": cancel_receipt, "sha256": receipt_hash})
         else:
             raise ValueError("unsupported transfer action")
-        value["version"] = VERSION
+        value["version"] = max(LEGACY_VERSION, value["version"])
         value["handoff"] = handoff
         value["updated"] = now()
         revision = publish(directory, value)
@@ -784,6 +813,35 @@ def make_anchor(path, offset, length):
         raw = stream.read(length)
     require(len(raw) == length, "source range is incomplete")
     return {"path": str(path), "offset": offset, "length": length, "sha256": digest(raw), "recorded": now()}
+
+
+def export_v7(project, task, session, expected, dry_run=False):
+    """Publish a new v1.8.3-readable revision of the current state; never rewind latest."""
+    root, directory = store(project, task)
+    with lock(directory):
+        value, revision = load(root, task)
+        require(revision == expected, "stale revision; inspect latest before exporting")
+        require(value["owner"] == identifier(session), "export requires the current owner")
+        require(value["version"] == VERSION, "export requires a format 8 checkpoint")
+        require(value["handoff"]["phase"] in {"NONE", "CANCELLED", "ACCEPTED"}, "finish the existing reservation before export")
+        note = value["note"]
+        validate_note(note)
+        require(note_bytes(note, legacy=True) <= MAX_NOTE, "current note exceeds capacity for v1.8.3; keep the compatible program")
+        for _, archived in archived_notes(root, task, note, max_version=LEGACY_VERSION):
+            for op in archived.get("operations", []):
+                if op.get("retired"):
+                    require(file_hash(root, op["receipt"]) == op["retired"]["receipt_sha256"], "archived failure receipt changed; keep current revision")
+        check = verify(root, task, history=True)
+        require(check["ok"] and check["history"]["ok"], "resolve source or checkpoint issues before export")
+        converted = {**value, "version": LEGACY_VERSION, "compat_from_revision": revision}
+        raw = encode(converted)
+        require(len(raw) <= MAX_NOTE * 2, "export exceeds physical snapshot limit; keep current revision")
+        result = {"from_revision": revision, "revision": digest(raw), "version": LEGACY_VERSION, "dry_run": dry_run}
+        if not dry_run:
+            next_rev = snapshot(directory, converted)
+            require(load(root, task, next_rev)[0] == converted, "export verification failed; keep current revision")
+            atomic(directory / "latest.json", encode({"revision": next_rev}))
+        return result
 
 
 def read_source(anchor, project=None):
@@ -1012,13 +1070,15 @@ def hook(payload):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("save", "show", "verify", "transfer", "recall", "operation", "record"):
+    for name in ("save", "show", "verify", "transfer", "recall", "operation", "record", "export-v7"):
         child = commands.add_parser(name)
         child.add_argument("--project", required=True)
         child.add_argument("--task", required=True)
-        if name in {"save", "transfer"}:
+        if name in {"save", "transfer", "export-v7"}:
             child.add_argument("--session", required=True)
             child.add_argument("--expected", required=True)
+        if name == "export-v7":
+            child.add_argument("--dry-run", action="store_true", help="check v1.8.3 compatibility without publishing")
         if name == "save":
             child.add_argument("--input", required=True)
             child.add_argument("--patch", action="store_true", help="merge a small note update into current state")
@@ -1073,6 +1133,8 @@ def main():
             result = save(args.project, args.task, args.session, bounded_json(args.input), args.expected, args.patch, args.archive_superseded, args.archive_completed, args.dry_run, args.retain_sources)
         elif args.command == "recall":
             result = recall(args.project, args.task, args.query, args.offset, args.limit, args.history, args.revision, args.detail)
+        elif args.command == "export-v7":
+            result = export_v7(args.project, args.task, args.session, args.expected, args.dry_run)
         elif args.command == "operation":
             result = operation(args.project, args.task, args.id)
         elif args.command == "record":

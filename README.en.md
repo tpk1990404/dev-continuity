@@ -8,7 +8,13 @@ dev-continuity is an independent community skill for long development tasks, int
 
 This is not an OpenAI product, infinite memory, a background agent, or a promise of uninterrupted execution.
 
-## What's new in 1.8.3
+## What's new in 1.9.0
+
+- The 48 KiB note budget counts compact UTF-8 JSON. Snapshot encoding, hashes and the separate 96 KiB physical limit are unchanged. File bytes do not measure model tokens.
+- Ordinary compatible writes stay at format 7. The first save or reservation that needs compact-only behavior publishes format 8 atomically with that change. v1.8.3 refuses the new head. Pending legacy reservations keep their original request, settings and readiness rules.
+- Use `export-v7 --dry-run` with the current owner and revision before handing a task back to v1.8.3. Successful export creates a new revision of the latest progress, never a rewind. Installation does not migrate projects. [Release notes](CHANGELOG.md#190--2026-11-04).
+
+### What's new in 1.8.3
 
 - **Separate owner and subagent signals:** Hooks verify the transcript's actual identity before updating state. Subagents cannot overwrite parent usage or consume its stage prompt. Project usage also checks old runtime identity; unknown does not mean spare capacity.
 - **Keep stage conclusions current:** update the short decision at the agreed boundary during normal work; its timestamp records a real review. Recover the complete goal and approved deliverable before following historical next steps.
@@ -151,14 +157,15 @@ At 70%, save meaningful changes. At 80%, after compaction or at a batch transiti
 ```bash
 python3 -B -m unittest discover -s dev-continuity/scripts -p test_continuity.py
 python3 -B -m unittest discover -s . -p test_install.py
+python3 -B -m unittest test_compat  # requires a git checkout containing the v1.8.3 commit
 python3 -B examples/demo.py
 python3 install.py restore --file /path/to/receipt.json
 ```
 
 CI targets Windows/Ubuntu and Python 3.11/3.14. It does not prove every Codex host's hook or task-creation integration. macOS is not included in this CI matrix.
 
-Restore refuses to overwrite files changed after installation. Supply the original `--home`/`--skill-dir` options when applicable. Version 1.8 reads schemas 1–7 and writes schema 7 so older writers cannot ignore retired failure IDs. Installation does not rewrite task data. Existing policy 1/2/3/4 reservations retain their settings and checks; new reservations still use policy 4. Necessary handoffs require `new_handoff_ready`, including migration review and actual successor settings. Routine continuation does not need a refreshed migration declaration; acknowledgements do not prove semantic correctness.
+Restore refuses to overwrite files changed after installation. Supply the original `--home`/`--skill-dir` when applicable. Version 1.9 reads formats 1–8 and does not migrate task data on install. If v1.8.3 rejects format 8, restore a compatible program and resume the latest revision. When an older writer is essential, back up the latest checkpoint, archives, sources and receipts; run `export-v7 --project PROJECT --task TASK --session OWNER --expected LATEST_REV --dry-run` with v1.9, then repeat without `--dry-run` only if the preview passes. Pending reservations, an oversized legacy note, an incompatible reachable archive or failed integrity checks prevent conversion.
 
-After schema 7 writes, resume with a compatible version and preserve all subsequent progress. Restoring skill files does not authorize task-state rollback or replay.
+Verify the exported revision, prior references and next action before using the older writer. Never restore an old task pointer to make old software run.
 
 Use [Issues](https://github.com/tpk1990404/dev-continuity/issues) for reproducible bugs and proposals, and private security reporting for sensitive findings. Licensed under the [MIT License](LICENSE).

@@ -2,7 +2,7 @@
 name: dev-continuity
 description: Maintain resumable development checkpoints, trace decisions to source records, and transfer unfinished work across conversations. Use for long development tasks, context pressure, interruption recovery, or handoff; skip routine one-step edits and unrelated questions.
 metadata:
-  version: "1.8.3"
+  version: "1.9.0"
 ---
 
 # 开发连续性
@@ -24,7 +24,7 @@ metadata:
 
 复用权威需求/验收表：goal 保留完整目标及入口，batch.scope 引用本批条目。每项保留状态、验证范围或待办；取消/后置须有用户依据。来源变化、批次结束或宣称完成前核对全表与用户纠正，复用同版本有效证据。完整目标达成才写 completed=true。
 
-critical 是本次恢复必读，含完整需求入口、权限、禁止、未知操作及验收边界；模块细节和完成历史按需读。容量超过80%整理，超过95%禁止新交接；不截断约束或因省篇幅降低保护。未知/在途及未执行操作保持当前，历史 ID 不复用，锁冲突不擅删。
+critical 是本次恢复必读，含完整需求入口、权限、禁止、未知操作及验收边界；模块细节和完成历史按需读。正文按紧凑 UTF-8 计量；超过80%整理，超过95%禁止新交接。不截断约束，未知/在途和未执行项保持当前，历史 ID 不复用。格式8须由兼容版本继续；确需降级见[安全导出](references/operations.md#安全导出给-v183)，不回退检查点或擅删锁。
 
 首次登记、归并、归档或来源保护前，读取[记忆格式](references/memory.md)相应段落；批量整理还须读其中“安全维护”。复用 supersedes、retire_operations 和原文保留机制，用户要求/决定不能直接退役。先保存历史再发布入口，保留完整原意及失败回执；来源缺失或状态不明则保留待核，不为瘦身扩大整理。哈希和脚本通过不证明语义完整。
 

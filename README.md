@@ -12,7 +12,13 @@
 
 > 社区独立项目，并非 OpenAI 官方产品。它改善可恢复性，不提供“无限记忆”，不保证每次压缩前都完成语义交接，也不保证应用退出后自动运行。
 
-## 1.8.3 更新
+## 1.9.0 更新
+
+- 正文按紧凑 UTF-8 JSON 计算容量，48 KiB 上限与实际快照 96 KiB 保护保持；排版空白不再挤占新决定的空间。这个数字不是模型 token。
+- 能兼容 v1.8.3 的普通保存继续写格式7。只有真正使用额外容量或准备一笔旧计量不会放行的交接才写格式8，旧程序会拒绝读写；在途旧预约仍按原编号、模型/强度和规则收尾。
+- 需要回到 v1.8.3 时，以当前最新状态[预演并导出](dev-continuity/references/operations.md#安全导出给-v183)，不回退项目指针、不重放操作。安装不迁移检查点，无新依赖或模型调用。[完整变更](CHANGELOG.md#190--2026-11-04)。
+
+### 1.8.3 更新
 
 - **隔离主对话与子代理信号**：Hook 先核对日志真实身份，子代理不能覆盖父对话用量或提前消费阶段提示；读取旧 runtime 时也核对身份，不把未知当作余量充足。
 - **让阶段结论跟上进度**：到约定节点在正常收尾中同步短结论，时间代表实际复核。恢复先看完整目标和已批准交付物，再使用历史下一步。
@@ -206,7 +212,7 @@ Hooks必须在Codex中审查并信任才运行；CLI可用`/hooks`查看。安�
 python3 install.py restore --file /path/to/receipt.json
 ```
 
-如果安装文件后来被修改，恢复会拒绝覆盖。1.8读取schema1–7，保存及交接写schema7，避免旧脚本忽略失败归档的ID保护。安装不改项目记录，旧policy1/2/3/4预约保留原冻结值与检查；新预约仍为policy4，接受前核验实际设置。真正交接仍要求`new_handoff_ready`；原对话日常继续无需刷新迁移声明。下一安全节点重读 Skill。**回退Skill文件不等于安全回退任务状态**；写入schema7后须用兼容版本继续，不能回退指针掩盖已执行操作。
+如果安装文件后来被修改，恢复会拒绝覆盖。**恢复技能文件不会转换项目格式。** v1.9 读取格式1–8，新预约仍为policy4。v1.8.3 遇到格式8时恢复兼容程序即可续跑；确需旧程序续写，先按[安全导出](dev-continuity/references/operations.md#安全导出给-v183)检查。安装不改项目记录，不重算在途预约，不用旧备份覆盖最新状态。
 
 | 情况 | 处理 |
 | --- | --- |
@@ -224,6 +230,7 @@ Python **3.11+**，只使用标准库，无需`pip install`。核心测试覆盖
 ```bash
 python3 -B -m unittest discover -s dev-continuity/scripts -p test_continuity.py
 python3 -B -m unittest discover -s . -p test_install.py
+python3 -B -m unittest test_compat  # 需要含 v1.8.3 提交的 Git 检出
 python3 -B examples/demo.py
 ```
 
