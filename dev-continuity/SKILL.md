@@ -2,7 +2,7 @@
 name: dev-continuity
 description: Maintain resumable development checkpoints, trace decisions to source records, and transfer unfinished work across conversations. Use for long development tasks, context pressure, interruption recovery, or handoff; skip routine one-step edits and unrelated questions.
 metadata:
-  version: "1.9.0"
+  version: "1.9.1"
 ---
 
 # 开发连续性
@@ -26,13 +26,13 @@ metadata:
 
 critical 是本次恢复必读，含完整需求入口、权限、禁止、未知操作及验收边界；模块细节和完成历史按需读。正文按紧凑 UTF-8 计量；超过80%整理，超过95%禁止新交接。不截断约束，未知/在途和未执行项保持当前，历史 ID 不复用。格式8须由兼容版本继续；确需降级见[安全导出](references/operations.md#安全导出给-v183)，不回退检查点或擅删锁。
 
-首次登记、归并、归档或来源保护前，读取[记忆格式](references/memory.md)相应段落；批量整理还须读其中“安全维护”。复用 supersedes、retire_operations 和原文保留机制，用户要求/决定不能直接退役。先保存历史再发布入口，保留完整原意及失败回执；来源缺失或状态不明则保留待核，不为瘦身扩大整理。哈希和脚本通过不证明语义完整。
+首次登记、归并、归档或来源保护前，读取[记忆格式](references/memory.md)相应段落；批量整理还须读其中“安全维护”。复用 supersedes、retire_operations 和原文保留机制，用户要求/决定不能直接退役。可变原文在改写前保留已核片段；先保存历史再发布入口，保留完整原意及失败回执。来源缺失或状态不明则保留待核，不为瘦身扩大整理。哈希和脚本通过不证明语义完整。
 
 ## 仅在必要时交接
 
 70%提示保存；80%或新压缩提示核对记忆，均不要求换对话。实质批次结束、约定 next_check 到达或已确认恢复异常时，在安全节点顺带复核原目标、用户纠正、未完成及继续方式；普通保存和重复压缩不逐次重审。实质批次切换更新 batch.id，不逐轮换 ID。能完整恢复就继续，缺信息先检索；换对话不能修复缺失原文。
 
-约定节点实际复核后，或理由/复核点变化时，同步已有 memory_review.continuation，按[阶段复核](references/memory.md#阶段复核)保存短结论；at 是真实核对时间，不能只刷时间消除提醒。同版本有效审计可复用。只有影响继续方式或需要澄清时才向用户简述，不固定提醒。“暂不接棒”保留原话与适用范围；到相关节点查后续指示，不擅自扩大成永久限制，也不按时间或压缩次数自动解除。范围不清且确需迁移时一次澄清，独立已授权工作继续。
+同一 batch 内也须在约定节点实际复核后，或理由/复核点变化时，同步已有 memory_review.continuation，按[阶段复核](references/memory.md#阶段复核)保存短结论；at 是真实核对时间，不能只刷时间消除提醒。同版本有效审计可复用。只有影响继续方式或需要澄清时才向用户简述，不固定提醒。“暂不接棒”保留原话与适用范围；到相关节点查后续指示，不擅自扩大成永久限制，也不按时间或压缩次数自动解除。范围不清且确需迁移时一次澄清，独立已授权工作继续。
 
 仅用户要求、宿主不能可靠续跑，或具体恢复问题且迁移有帮助时交接。先读[操作参考](references/operations.md)的“一次接棒”，按既有预约一次 → 记录真实新任务 → 释放旧写入权 → 接棒执行 next。适用的暂不接棒限制未解除、目标完成或无独立 next 时不创建；结果未知先查，不重复创建或并发写入。继承当前 owner 最新同一条实际 turn_context 的 model/effort，prepare 冻结；有用户依据的调整绑定来源 owner。accept 核验实际设置，不符或未知保持只读并重试同一预约，旧预约保留原策略。
 

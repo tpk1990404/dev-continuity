@@ -1,4 +1,5 @@
 """Run with: python -m unittest discover -s PATH_TO_SCRIPTS -p test_continuity.py"""
+from contextlib import chdir
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
@@ -222,6 +223,74 @@ class ContinuityTest(unittest.TestCase):
         self.assertFalse((other / ".dev-continuity").exists())
         with self.assertRaises(FileNotFoundError):
             c.load(other, "task")
+
+    def test_project_relative_sources_survive_foreign_cwd_and_retention(self):
+        source = self.root / '原文.txt'
+        original = '保留旧决定及未完成事项。'.encode('utf-8')
+        source.write_bytes(original)
+        anchor = {**c.make_anchor(source, 0, len(original)), 'path': source.name}
+        self.note['records'][0]['sources'] = [anchor]
+        foreign = self.root / 'elsewhere'
+        foreign.mkdir()
+        (foreign / source.name).write_bytes(b'wrong project')
+        with chdir(foreign):
+            self.assertEqual(c.read_source(anchor, self.root), original)
+            revision = c.save(self.root, 'task', 'old', self.note, 'new', retain_sources=True)['revision']
+            self.assertTrue(c.verify(self.root, 'task')['ok'])
+            source.write_bytes(b'new current report')
+            self.assertEqual(c.lookup(self.root, 'task', 'boundary', 'records', 0)['source']['text'], original.decode('utf-8'))
+            self.assertEqual(c.load(self.root, 'task')[1], revision)
+
+    def test_project_relative_source_never_falls_back_to_unrelated_cwd(self):
+        source = self.root / 'request.txt'
+        original = source.read_bytes().rstrip(b'\n')
+        anchor = {**c.make_anchor(source, 0, len(original)), 'path': source.name}
+        foreign = self.root / 'foreign'
+        foreign.mkdir()
+        (foreign / source.name).write_bytes(original)
+        source.write_bytes(b'changed in intended project')
+        with chdir(foreign):
+            with self.assertRaisesRegex(ValueError, 'source changed'):
+                c.read_source(anchor, self.root)
+            c.retain_bytes(self.root, anchor['sha256'], original)
+            self.assertEqual(c.read_source(anchor, self.root), original)
+
+    def test_relative_escape_and_absolute_legacy_source(self):
+        source = self.root / 'request.txt'
+        anchor = c.make_anchor(source, 0, 8)
+        project = self.root / 'project'
+        project.mkdir()
+        relative = {**anchor, 'path': '../request.txt'}
+        with chdir(project):
+            with self.assertRaisesRegex(ValueError, 'source changed'):
+                c.read_source(relative, project)
+            self.assertEqual(c.read_source(anchor, project), source.read_bytes()[:8])
+            self.assertEqual(c.read_source(relative), source.read_bytes()[:8])
+
+    def test_moved_source_candidate_recovers_old_reference_without_rewriting(self):
+        source = self.root / 'request.txt'
+        original = source.read_bytes().rstrip(b'\n')
+        anchor = {**c.make_anchor(source, 0, len(original)), 'path': source.name}
+        self.note['records'][0]['sources'] = [anchor]
+        with chdir(self.root):
+            revision = c.save(self.root, 'task', 'old', self.note, 'new')['revision']
+        prefix = '新增进度\n'.encode('utf-8')
+        source.write_bytes(prefix + original)
+        anchor_file = self.root / 'original-anchor.json'
+        anchor_file.write_bytes(c.encode(anchor))
+        before = anchor_file.read_bytes()
+        command = [sys.executable, '-B', str(Path(c.__file__).resolve()), 'source', '--project', str(self.root),
+                   '--input', str(anchor_file), '--candidate', str(source), '--retain']
+        failed = subprocess.run(command + ['--candidate-offset', '0'], cwd=self.root.parent, capture_output=True)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertFalse((self.root / '.dev-continuity/sources' / (anchor['sha256'] + '.txt')).exists())
+        good = subprocess.run(command + ['--candidate-offset', str(len(prefix))], cwd=self.root.parent, capture_output=True)
+        self.assertEqual(good.returncode, 0, good.stderr)
+        with chdir(self.root.parent):
+            self.assertEqual(c.read_source(anchor, self.root), original)
+            self.assertTrue(c.verify(self.root, 'task')['ok'])
+        self.assertEqual(anchor_file.read_bytes(), before)
+        self.assertEqual(c.load(self.root, 'task')[1], revision)
 
     def test_source_anchor_append_allowed_change_rejected(self):
         source = self.root / "source.jsonl"

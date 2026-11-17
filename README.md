@@ -12,7 +12,13 @@
 
 > 社区独立项目，并非 OpenAI 官方产品。它改善可恢复性，不提供“无限记忆”，不保证每次压缩前都完成语义交接，也不保证应用退出后自动运行。
 
-## 1.9.0 更新
+## 1.9.1 更新
+
+- 修复跨目录读取：相对原文路径按指定项目解析，避免误读工作目录下的同名文件；绝对历史路径和原文保留片段继续兼容。
+- 可变原文在改写前保留；已移动的片段只有完整摘要一致才恢复旧引用，不重写历史。同一大批次内到达约定节点也更新短复核。
+- 格式、容量上限、交接与模型继承不变，不增加调度、提醒频率或模型调用。安装不整理或迁移项目记忆。[完整变更](CHANGELOG.md#191--2026-11-17)。
+
+### 1.9.0 更新
 
 - 正文按紧凑 UTF-8 JSON 计算容量，48 KiB 上限与实际快照 96 KiB 保护保持；排版空白不再挤占新决定的空间。这个数字不是模型 token。
 - 能兼容 v1.8.3 的普通保存继续写格式7。只有真正使用额外容量或准备一笔旧计量不会放行的交接才写格式8，旧程序会拒绝读写；在途旧预约仍按原编号、模型/强度和规则收尾。
@@ -230,7 +236,7 @@ Python **3.11+**，只使用标准库，无需`pip install`。核心测试覆盖
 ```bash
 python3 -B -m unittest discover -s dev-continuity/scripts -p test_continuity.py
 python3 -B -m unittest discover -s . -p test_install.py
-python3 -B -m unittest test_compat  # 需要含 v1.8.3 提交的 Git 检出
+python3 -B -m unittest test_compat  # 需要含 v1.8.3/v1.9.0 提交的 Git 检出
 python3 -B examples/demo.py
 ```
 

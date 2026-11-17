@@ -8,7 +8,13 @@ dev-continuity is an independent community skill for long development tasks, int
 
 This is not an OpenAI product, infinite memory, a background agent, or a promise of uninterrupted execution.
 
-## What's new in 1.9.0
+## What's new in 1.9.1
+
+- Resolve relative source paths against the supplied project, never an unrelated working directory. Absolute historical sources and verified retained slices remain compatible.
+- Preserve mutable sources before rewriting them. Recover a moved slice only when its full original digest matches, without changing the old reference. Refresh the short continuation decision at the agreed boundary even within the same batch.
+- No format migration, capacity increase, extra scheduler, reminder frequency or model call. Installation does not maintain project records or change model inheritance. [Release notes](CHANGELOG.md#191--2026-11-17).
+
+### What's new in 1.9.0
 
 - The 48 KiB note budget counts compact UTF-8 JSON. Snapshot encoding, hashes and the separate 96 KiB physical limit are unchanged. File bytes do not measure model tokens.
 - Ordinary compatible writes stay at format 7. The first save or reservation that needs compact-only behavior publishes format 8 atomically with that change. v1.8.3 refuses the new head. Pending legacy reservations keep their original request, settings and readiness rules.
@@ -157,7 +163,7 @@ At 70%, save meaningful changes. At 80%, after compaction or at a batch transiti
 ```bash
 python3 -B -m unittest discover -s dev-continuity/scripts -p test_continuity.py
 python3 -B -m unittest discover -s . -p test_install.py
-python3 -B -m unittest test_compat  # requires a git checkout containing the v1.8.3 commit
+python3 -B -m unittest test_compat  # requires a git checkout containing v1.8.3 and v1.9.0
 python3 -B examples/demo.py
 python3 install.py restore --file /path/to/receipt.json
 ```

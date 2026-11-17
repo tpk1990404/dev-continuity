@@ -1,4 +1,5 @@
-"""Release interoperability tests; run in a git checkout containing the v1.8.3 release."""
+"""Release interoperability tests; git history must contain v1.8.3 and v1.9.0."""
+from contextlib import chdir
 from copy import deepcopy
 import hashlib
 import json
@@ -143,6 +144,33 @@ class VersionBridge(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'source'):
                 c.export_v7(self.root,'task','old',self.r,preview)
             self.assertEqual(c.load(self.root,'task')[1],self.r)
+
+
+    def test_v190_reads_and_updates_retained_sources_without_format_migration(self):
+        raw = subprocess.check_output(['git', 'show',
+            '55c7aa7d65f8edf91d4052df7dad7ec8b0fc9ab6:dev-continuity/scripts/continuity.py'], cwd=ROOT)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+                         '35214d8fc33d4cd2600dc2a7985f7637d71fed6fa704bf5c9e8e3b4c5afd065e')
+        old = types.ModuleType('continuity_v190')
+        exec(compile(raw, 'v1.9.0/continuity.py', 'exec'), old.__dict__)
+        self.sized(c.MAX_NOTE + 1)
+        source = self.root / 'request.txt'
+        anchor = {**c.make_anchor(source, 0, source.stat().st_size), 'path': source.name}
+        current, _ = c.load(self.root, 'task')
+        record = self.f.record('relative-boundary', current['note']['records'][0]['text'],
+                               sources=[anchor], supersedes=['boundary'],
+                               reason='The verified source now uses a project-relative path.')
+        with chdir(self.root.parent):
+            self.r = c.save(self.root, 'task', 'old', {'records': [record]}, self.r,
+                            patch=True, retain_sources=True)['revision']
+            source.write_bytes(b'updated current report')
+            self.assertEqual(old.load(self.root, 'task'), c.load(self.root, 'task'))
+            self.assertTrue(old.verify(self.root, 'task')['ok'])
+            self.r = old.save(self.root, 'task', 'old', {'next': ['latest progress retained']}, self.r, patch=True)['revision']
+            result, revision = c.load(self.root, 'task')
+            self.assertEqual((revision, result['version'], result['note']['next']),
+                             (self.r, 8, ['latest progress retained']))
+            self.assertEqual(c.read_source(anchor, self.root), old.read_source(anchor, self.root))
 
 
 if __name__=='__main__':

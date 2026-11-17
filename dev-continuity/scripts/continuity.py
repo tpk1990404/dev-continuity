@@ -16,7 +16,7 @@ import uuid
 
 LEGACY_VERSION = 7  # Highest format understood by v1.8.3.
 VERSION = 8
-SKILL_VERSION = "1.9.0"
+SKILL_VERSION = "1.9.1"
 MAX_NOTE = 48 * 1024
 TAIL = 256 * 1024
 MAX_USAGE_SCAN = 8 * 1024 * 1024
@@ -848,16 +848,19 @@ def read_source(anchor, project=None):
     require(type(anchor["length"]) is int and 0 < anchor["length"] <= MAX_SOURCE
             and type(anchor["offset"]) is int and anchor["offset"] >= 0
             and isinstance(anchor["sha256"], str) and re.fullmatch(r"[0-9a-f]{64}", anchor["sha256"]), "invalid source anchor")
+    root = Path(project).resolve(strict=True) if project is not None else None
     try:
-        with Path(anchor["path"]).open("rb") as stream:
+        source = Path(anchor["path"])
+        if root is not None and not source.is_absolute():
+            source = inside(root, source)
+        with source.open("rb") as stream:
             stream.seek(anchor["offset"])
             raw = stream.read(anchor["length"])
         if len(raw) == anchor["length"] and digest(raw) == anchor["sha256"]:
             return raw
-    except OSError:
+    except (OSError, ValueError):
         pass
-    if project is not None:
-        root = Path(project).resolve(strict=True)
+    if root is not None:
         cached = inside(root, Path(".dev-continuity/sources") / (anchor["sha256"] + ".txt"))
         if cached.is_file():
             with cached.open("rb") as stream:

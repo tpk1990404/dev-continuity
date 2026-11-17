@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.1 — 2026-11-17
+
+- Resolve relative source anchors within the supplied project, including containment checks; never fall back to the caller's working directory. Preserve explicit absolute sources, standalone source reads and hash-checked retained slices.
+- Clarify preservation before mutable reports change, and recovery from an identical relocated slice with the original anchor untouched. No automatic history rewriting or whole-chat scanning.
+- Clarify that an agreed review boundary also applies within an unchanged batch ID. Reuse the short continuation decision and valid evidence; no new reminder loop, scheduler or review fields.
+- Keep formats 1–8, capacity gates, pending handoffs and runtime model/effort checks unchanged. Add source-path and source-recovery regressions; installation does not migrate or maintain project state.
+
 ## 1.9.0 — 2026-11-04
 
 - Count the 48 KiB note budget using compact UTF-8 JSON. Do not change snapshot serialization, digests, the physical 96 KiB ceiling, or the 80% and 95% handoff gates. Report which meter applies.
